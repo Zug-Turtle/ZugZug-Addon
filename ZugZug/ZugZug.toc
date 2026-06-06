@@ -1,0 +1,12 @@
+## Interface: 11200
+## Title: ZugZug
+## Notes: Zug Zug Guild Addon for Turtle
+## Author: Ben / Cows
+## Version: 0.1.0
+## SavedVariables: ZugZugDB
+
+ZugUtils.lua
+ZugLFGData.lua
+ZugLFG.lua
+ZugUI.lua
+ZugZug.lua
