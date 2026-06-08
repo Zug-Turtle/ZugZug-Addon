@@ -210,6 +210,67 @@ function ZugZug_LFG_IsValidRole(role)
     return false
 end
 
+function ZugZug_LFG_CountRoles(listing)
+    local counts = {
+        TANK = 0,
+        HEALER = 0,
+        DPS = 0,
+    }
+
+    if not listing or not listing.members then
+        return counts
+    end
+
+    local i = 1
+    while i <= table.getn(listing.members) do
+        local member = listing.members[i]
+        local role = nil
+
+        if member then
+            role = member.role or "DPS"
+        end
+
+        if not ZugZug_LFG_IsValidRole(role) then
+            role = "DPS"
+        end
+
+        if member and member.name then
+            counts[role] = (counts[role] or 0) + 1
+        end
+
+        i = i + 1
+    end
+
+    return counts
+end
+
+function ZugZug_LFG_GetNeedForRole(listing, role)
+    if not listing then return 0 end
+    if role == "TANK" then return tonumber(listing.needTank or 0) or 0 end
+    if role == "HEALER" then return tonumber(listing.needHealer or 0) or 0 end
+    if role == "DPS" then return tonumber(listing.needDps or 0) or 0 end
+    return 0
+end
+
+function ZugZug_LFG_GetHaveForRole(listing, role)
+    local counts = ZugZug_LFG_CountRoles(listing)
+    return tonumber(counts[role] or 0) or 0
+end
+
+function ZugZug_LFG_IsRoleFull(listing, role)
+    local need = ZugZug_LFG_GetNeedForRole(listing, role)
+    if need <= 0 then return true end
+    return ZugZug_LFG_GetHaveForRole(listing, role) >= need
+end
+
+function ZugZug_LFG_IsListingFull(listing)
+    if not listing then return true end
+    if not ZugZug_LFG_IsRoleFull(listing, "TANK") then return false end
+    if not ZugZug_LFG_IsRoleFull(listing, "HEALER") then return false end
+    if not ZugZug_LFG_IsRoleFull(listing, "DPS") then return false end
+    return true
+end
+
 function ZugZug_LFG_GetCreateRole()
     if ZugZug_LFG_IsValidRole(ZugZug.LFG.currentCreateRole) then
         return ZugZug.LFG.currentCreateRole
@@ -332,7 +393,13 @@ local function ZugZug_LFG_GetPendingRoleForMember(name)
 end
 
 function ZugZug_LFG_SyncListingFromActualParty(listing)
-    if not listing or listing.leader ~= UnitName("player") then return end
+    if not listing then return end
+    if listing.leader ~= UnitName("player") then
+        if not ZugZug_LFG_AssumeListingOwnership or not ZugZug_LFG_AssumeListingOwnership(listing) then
+            return
+        end
+    end
+
     if not listing.members then listing.members = {} end
 
     local i = table.getn(listing.members)
@@ -467,6 +534,133 @@ function ZugZug_LFG_PlayerHasActiveListing()
     return false
 end
 
+function ZugZug_LFG_GetGroupLeaderName()
+    local player = UnitName("player")
+
+    if UnitIsPartyLeader and UnitIsPartyLeader("player") then
+        return player
+    end
+
+    if GetNumRaidMembers and GetNumRaidMembers() > 0 then
+        local i = 1
+        while i <= GetNumRaidMembers() do
+            local unit = "raid" .. tostring(i)
+            if UnitIsPartyLeader and UnitIsPartyLeader(unit) then
+                return UnitName(unit)
+            end
+            i = i + 1
+        end
+    end
+
+    if GetNumPartyMembers and GetNumPartyMembers() > 0 then
+        local i = 1
+        while i <= GetNumPartyMembers() do
+            local unit = "party" .. tostring(i)
+            if UnitIsPartyLeader and UnitIsPartyLeader(unit) then
+                return UnitName(unit)
+            end
+            i = i + 1
+        end
+    end
+
+    return nil
+end
+
+function ZugZug_LFG_IsOnlineAddonListingMember(listing, name)
+    if not listing or not name or name == "" then return false end
+    if not ZugZug_LFG_IsListingMember(listing, name) then return false end
+    if not ZugZug_LFG_IsOnline(name) then return false end
+    if name == UnitName("player") then return true end
+    if ZugZug_GetAddonVersionForMember and ZugZug_GetAddonVersionForMember(name) then return true end
+    return false
+end
+
+function ZugZug_LFG_CanGroupLeaderKeepListing(listing, name)
+    if not listing or not name or name == "" then return false end
+    if not ZugZug_LFG_IsOnline(name) then return false end
+    if not ZugZug_LFG_IsListingMember(listing, name) and not ZugZug_LFG_IsInMyPartyOrRaid(name) then return false end
+    if name == UnitName("player") then return true end
+    if ZugZug_GetAddonVersionForMember and ZugZug_GetAddonVersionForMember(name) then return true end
+    return false
+end
+
+function ZugZug_LFG_GetPreferredKeeper(listing)
+    if not listing or not listing.members then return nil end
+
+    local groupLeader = ZugZug_LFG_GetGroupLeaderName()
+    if groupLeader and ZugZug_LFG_CanGroupLeaderKeepListing(listing, groupLeader) then
+        return groupLeader
+    end
+
+    local chosen = nil
+    local i = 1
+
+    while i <= table.getn(listing.members) do
+        local member = listing.members[i]
+        local name = nil
+
+        if member then
+            name = member.name
+        end
+
+        if name and ZugZug_LFG_IsOnlineAddonListingMember(listing, name) then
+            if not chosen or string.lower(name) < string.lower(chosen) then
+                chosen = name
+            end
+        end
+
+        i = i + 1
+    end
+
+    return chosen
+end
+
+function ZugZug_LFG_ShouldOwnListing(listing)
+    local player = UnitName("player")
+    if not player then return false end
+    return ZugZug_LFG_GetPreferredKeeper(listing) == player
+end
+
+function ZugZug_LFG_AssumeListingOwnership(listing)
+    local player = UnitName("player")
+    if not listing or not player then return false end
+    if not ZugZug_LFG_ShouldOwnListing(listing) then return false end
+    if listing.leader == player then return false end
+
+    listing.leader = player
+    listing.leaderRole = ZugZug_LFG_GetListingMemberRole(listing, player) or ZugZug_LFG_GetCreateRole()
+    listing.leaderClass = ZugZug_LFG_GetPlayerClass()
+    listing.leaderLevel = ZugZug_LFG_GetPlayerLevel()
+    ZugZug.LFG.myListingId = listing.id
+    return true
+end
+
+function ZugZug_LFG_HasOnlineAddonKeeper(listing)
+    if ZugZug_LFG_GetPreferredKeeper(listing) then return true end
+    return false
+end
+
+function ZugZug_LFG_MaintainListingOwnership()
+    local changed = false
+
+    for id, listing in pairs(ZugZug.LFG.listings) do
+        if listing and ZugZug_LFG_ShouldOwnListing(listing) then
+            if ZugZug_LFG_AssumeListingOwnership(listing) then
+                changed = true
+            end
+
+            if listing.leader == UnitName("player") then
+                ZugZug.LFG.myListingId = id
+                ZugZug_LFG_SyncListingFromActualParty(listing)
+            end
+        end
+    end
+
+    if changed then
+        ZugZug_LFG_SyncToGuild()
+    end
+end
+
 function ZugZug_LFG_CanCreateListing()
     if ZugZug_LFG_PlayerHasActiveListing() then
         return false
@@ -500,7 +694,9 @@ function ZugZug_LFG_SetListingMemberRole(id, name, role)
     local listing = ZugZug.LFG.listings[id]
     if not listing then return end
 
-    if listing.leader ~= UnitName("player") then return end
+    if listing.leader ~= UnitName("player") then
+        if not ZugZug_LFG_AssumeListingOwnership(listing) then return end
+    end
 
     local isLeaderSelf = false
     if name == UnitName("player") and listing.leader == UnitName("player") then
@@ -765,6 +961,36 @@ function ZugZug_LFG_BroadcastListing(listing)
     ZugZug_BroadcastAddon("LFG_UPSERT~" .. ZugZug_LFG_EncodeListing(listing))
 end
 
+function ZugZug_LFG_RequestSync()
+    local player = UnitName("player")
+    if not player or player == "" then return end
+    ZugZug_BroadcastAddon("LFG_SYNC_REQ~" .. ZugZug_LFG_Encode(player))
+end
+
+function ZugZug_LFG_SendSyncResponse(target, listing)
+    if not target or target == "" then return end
+    if not listing then return end
+
+    ZugZug_BroadcastAddon("LFG_SYNC_RES~"
+        .. ZugZug_LFG_Encode(target) .. ":"
+        .. ZugZug_LFG_EncodeListing(listing)
+    )
+end
+
+function ZugZug_LFG_RespondToSyncRequest(target)
+    if not target or target == "" then return end
+
+    for id, listing in pairs(ZugZug.LFG.listings) do
+        if listing then
+            if ZugZug_LFG_IsListingMember(listing, target) then
+                ZugZug_LFG_SendSyncResponse(target, listing)
+            elseif ZugZug_LFG_ShouldOwnListing(listing) then
+                ZugZug_LFG_SendSyncResponse(target, listing)
+            end
+        end
+    end
+end
+
 function ZugZug_LFG_CreateListing(target, note)
     if ZugZug_LFG_CanCreateListing and not ZugZug_LFG_CanCreateListing() then
         ZugZug_Log("You are already in a guild LFG.")
@@ -824,7 +1050,7 @@ function ZugZug_LFG_CloseListing(id)
     if not id or id == "" then return end
 
     local listing = ZugZug.LFG.listings[id]
-    if listing and listing.leader ~= UnitName("player") then
+    if listing and listing.leader ~= UnitName("player") and not ZugZug_LFG_ShouldOwnListing(listing) then
         return
     end
 
@@ -848,6 +1074,20 @@ function ZugZug_LFG_JoinListing(id, role)
 
     local listing = ZugZug.LFG.listings[id]
     if not listing then return end
+
+    if ZugZug_LFG_IsListingFull(listing) then
+        ZugZug_Log("That LFG is already full.")
+        ZugZug.UI.selectedJoinListingId = nil
+        ZugZug_LFG_RefreshUIImmediate()
+        return
+    end
+
+    if ZugZug_LFG_IsRoleFull(listing, role) then
+        ZugZug_Log("That LFG already has enough " .. role .. ".")
+        ZugZug.UI.selectedJoinListingId = nil
+        ZugZug_LFG_RefreshUIImmediate()
+        return
+    end
 
     if listing.leader == UnitName("player") then
         return
@@ -899,9 +1139,53 @@ function ZugZug_LFG_LeaveListing(id)
 end
 
 function ZugZug_LFG_HandleMessage(cmd, data, sender)
+    if cmd == "LFG_SYNC_REQ" then
+        local target = ZugZug_LFG_Decode(data or "")
+
+        if target and target ~= "" and target ~= UnitName("player") then
+            ZugZug_LFG_RespondToSyncRequest(target)
+        end
+
+        return
+    end
+
+    if cmd == "LFG_SYNC_RES" then
+        local sep = string.find(data or "", ":", 1, true)
+        if not sep then return end
+
+        local target = ZugZug_LFG_Decode(string.sub(data, 1, sep - 1))
+        if not target or target == "" then return end
+        if string.lower(target) ~= string.lower(UnitName("player") or "") then return end
+
+        local listing = ZugZug_LFG_DecodeListing(string.sub(data, sep + 1))
+        if not listing then return end
+
+        if listing.expiresAt and listing.expiresAt < time() then
+            return
+        end
+
+        ZugZug.LFG.listings[listing.id] = listing
+
+        if ZugZug_LFG_IsListingMember(listing, UnitName("player")) then
+            ZugZug.LFG.myListingId = listing.id
+        end
+
+        if ZugZug_LFG_MaintainListingOwnership then
+            ZugZug_LFG_MaintainListingOwnership()
+        end
+
+        ZugZug_LFG_RefreshUIThrottled("lfg_sync_res")
+        return
+    end
+
     if cmd == "LFG_UPSERT" then
         local listing = ZugZug_LFG_DecodeListing(data)
         if not listing then return end
+        local isNewListing = false
+
+        if listing.id and not ZugZug.LFG.listings[listing.id] then
+            isNewListing = true
+        end
 
         if listing.expiresAt and listing.expiresAt < time() then
             ZugZug.LFG.listings[listing.id] = nil
@@ -909,6 +1193,15 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
         end
 
         ZugZug.LFG.listings[listing.id] = listing
+
+        if isNewListing
+            and listing.leader ~= UnitName("player")
+            and sender ~= UnitName("player")
+            and ZugZug_GetEnableLFGNotifications
+            and ZugZug_GetEnableLFGNotifications()
+        then
+            ZugZug_Log("New LFG: " .. (listing.target or "?") .. " by " .. (listing.leader or "?"))
+        end
 
         ZugZug_LFG_RefreshUIThrottled("lfg_upsert")
 
@@ -947,8 +1240,16 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
         local listing = ZugZug.LFG.listings[id]
         if not listing then return end
 
-        -- Only the listing owner invites and later confirms the member.
-        if listing.leader == UnitName("player") and sender and sender ~= UnitName("player") then
+        -- Only the current listing keeper invites and later confirms the member.
+        if sender and sender ~= UnitName("player") and ZugZug_LFG_ShouldOwnListing(listing) then
+            if listing.leader ~= UnitName("player") then
+                ZugZug_LFG_AssumeListingOwnership(listing)
+            end
+
+            if ZugZug_LFG_IsListingFull(listing) or ZugZug_LFG_IsRoleFull(listing, role) then
+                return
+            end
+
             if not ZugZug.LFG.pendingJoinRequests then
                 ZugZug.LFG.pendingJoinRequests = {}
             end
@@ -979,8 +1280,12 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
         local listing = ZugZug.LFG.listings[id]
         if not listing then return end
 
-        -- Only leader accepts role changes, and only for actual party/raid members.
-        if listing.leader == UnitName("player") and sender and ZugZug_LFG_IsInMyPartyOrRaid(sender) then
+        -- Only the current keeper accepts role changes, and only for actual party/raid members.
+        if sender and ZugZug_LFG_IsInMyPartyOrRaid(sender) and ZugZug_LFG_ShouldOwnListing(listing) then
+            if listing.leader ~= UnitName("player") then
+                ZugZug_LFG_AssumeListingOwnership(listing)
+            end
+
             if ZugZug_LFG_SetLocalMemberRole(listing, sender, role) then
                 ZugZug_LFG_BroadcastListing(listing)
 
@@ -998,7 +1303,10 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
         if listing then
             ZugZug_LFG_RemoveMember(listing, sender)
 
-            if listing.leader == UnitName("player") then
+            if ZugZug_LFG_ShouldOwnListing(listing) then
+                if listing.leader ~= UnitName("player") then
+                    ZugZug_LFG_AssumeListingOwnership(listing)
+                end
                 ZugZug_LFG_BroadcastListing(listing)
             end
         end
@@ -1010,13 +1318,22 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
 end
 
 function ZugZug_LFG_SyncToGuild()
-    local id = ZugZug.LFG.myListingId
-    if not id then return end
+    local player = UnitName("player")
+    if not player then return end
 
-    local listing = ZugZug.LFG.listings[id]
-    if not listing then return end
+    for id, listing in pairs(ZugZug.LFG.listings) do
+        if listing and ZugZug_LFG_ShouldOwnListing(listing) then
+            if listing.leader ~= player then
+                ZugZug_LFG_AssumeListingOwnership(listing)
+            end
 
-    ZugZug_LFG_BroadcastListing(listing)
+            if listing.leader == player then
+                ZugZug.LFG.myListingId = id
+                ZugZug_LFG_SyncListingFromActualParty(listing)
+                ZugZug_LFG_BroadcastListing(listing)
+            end
+        end
+    end
 end
 
 function ZugZug_LFG_PruneExpired()
@@ -1035,15 +1352,19 @@ end
 function ZugZug_LFG_PruneOffline()
     for id, listing in pairs(ZugZug.LFG.listings) do
         if listing and listing.leader then
-            if not ZugZug_isGuildMember(listing.leader) then
-                ZugZug.LFG.listings[id] = nil
-            elseif not ZugZug_LFG_IsOnline(listing.leader) then
+            local hasKeeper = ZugZug_LFG_HasOnlineAddonKeeper(listing)
+
+            if (not ZugZug_isGuildMember(listing.leader) or not ZugZug_LFG_IsOnline(listing.leader)) and not hasKeeper then
                 ZugZug.LFG.listings[id] = nil
             else
+                if hasKeeper and ZugZug_LFG_ShouldOwnListing(listing) then
+                    ZugZug_LFG_AssumeListingOwnership(listing)
+                end
+
                 local i = table.getn(listing.members)
                 while i >= 1 do
                     local member = listing.members[i]
-                    if member and member.name and not ZugZug_LFG_IsOnline(member.name) then
+                    if member and member.name and not ZugZug_LFG_IsOnline(member.name) and member.name ~= listing.leader then
                         table.remove(listing.members, i)
                     end
                     i = i - 1
@@ -1083,16 +1404,19 @@ function ZugZug_LFG_CheckPendingJoins()
             elseif now - (request.createdAt or now) > (ZugZug.LFG.pendingJoinTimeout or 20) then
                 ZugZug.LFG.pendingJoinRequests[name] = nil
             elseif ZugZug_LFG_IsInMyPartyOrRaid(name) then
-                ZugZug_LFG_AddOrUpdateMember(
-                    listing,
-                    name,
-                    request.role or "DPS",
-                    request.class or "",
-                    request.level or 0
-                )
+                if not ZugZug_LFG_IsRoleFull(listing, request.role or "DPS") then
+                    ZugZug_LFG_AddOrUpdateMember(
+                        listing,
+                        name,
+                        request.role or "DPS",
+                        request.class or "",
+                        request.level or 0
+                    )
+
+                    changed = true
+                end
 
                 ZugZug.LFG.pendingJoinRequests[name] = nil
-                changed = true
             end
         else
             ZugZug.LFG.pendingJoinRequests[name] = nil
@@ -1114,10 +1438,17 @@ function ZugZug_LFG_CheckPendingJoins()
 end
 
 function ZugZug_LFG_OnPartyChanged()
+    if ZugZug_LFG_MaintainListingOwnership then
+        ZugZug_LFG_MaintainListingOwnership()
+    end
+
     if ZugZug.LFG and ZugZug.LFG.myListingId then
         local listing = ZugZug.LFG.listings[ZugZug.LFG.myListingId]
 
-        if listing and listing.leader == UnitName("player") then
+        if listing and ZugZug_LFG_ShouldOwnListing(listing) then
+            if listing.leader ~= UnitName("player") then
+                ZugZug_LFG_AssumeListingOwnership(listing)
+            end
             ZugZug_LFG_CheckPendingJoins()
             ZugZug_LFG_SyncListingFromActualParty(listing)
             ZugZug_LFG_BroadcastListing(listing)
@@ -1129,6 +1460,9 @@ end
 
 function ZugZug_LFG_OnUpdate()
     ZugZug_LFG_PruneExpired()
+    if ZugZug_LFG_MaintainListingOwnership then
+        ZugZug_LFG_MaintainListingOwnership()
+    end
     ZugZug_LFG_CheckPendingJoins()
 
     if ZugZug.LFG.pendingAutoAcceptLeader and time() > (ZugZug.LFG.pendingAutoAcceptExpires or 0) then

@@ -2,7 +2,6 @@
 local function ZugZug_ShowHelp()
     ZugZug_Log("Commands:")
     ZugZug_Log("|cff00ffff/zug|r - Toggle Guild UI")
-    ZugZug_Log("|cff00ffff/zug perf|r - Show performance diagnostics")
     ZugZug_Log("|cff00ffff/zug help|r - Show commands")
 end
 
@@ -35,12 +34,16 @@ local function ZugZug_GetLuaKB()
 end
 
 local function ZugZug_ShowPerf()
-    local onlineCount = ZugZug_CountTableValues(ZugZug.onlineMembers)
+    local onlineCount = 0
     local lfgCount = 0
     local chunkCount = ZugZug_CountTableValues(ZugZug.incomingChunks)
     local tabCount = 0
     local pageCount = 0
     local refreshCount = 0
+
+    if ZugZug_GetOnlineMemberCount then
+        onlineCount = ZugZug_GetOnlineMemberCount()
+    end
 
     if ZugZug_LFG_GetListingCount then
         lfgCount = ZugZug_LFG_GetListingCount()
@@ -106,6 +109,9 @@ local function ZugZug_OnAddonMessage()
 
     if cmd == "LOGIN" then
         ZugZug_RecordAddonUser(sender, data)
+        if ZugZug_LFG_RespondToSyncRequest then
+            ZugZug_LFG_RespondToSyncRequest(sender)
+        end
         if ZugZug_LFG_SyncToGuild then
             ZugZug_LFG_SyncToGuild()
         end
@@ -277,9 +283,7 @@ zug:SetScript("OnEvent", function()
     elseif event == "GUILD_MOTD" then
         ZugZug_RefreshDashboardMOTD()
     elseif event == "PLAYER_LOGOUT" then
-        if ZugZug.LFG and ZugZug.LFG.myListingId then
-            ZugZug_LFG_CloseListing(ZugZug.LFG.myListingId)
-        end
+        return
     elseif event == "CHAT_MSG_ADDON" then
         ZugZug_OnAddonMessage()
 

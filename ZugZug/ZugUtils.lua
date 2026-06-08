@@ -22,6 +22,7 @@ ZugZug.CHUNK_SIZE = 170
 ZugZug.MAX_RAW_SIZE = 230
 ZugZug.CHUNK_TIMEOUT = 30
 ZugZug.MAX_INCOMING_CHUNKS = 80
+ZugZug.CAPY_CHAT_MAX_MESSAGES = 100
 ZugZug.chunkSeq = 0
 ZugZug.minimapAngle = 225
 ZugZug.incomingChunks = {}
@@ -43,6 +44,24 @@ function ZugZug_ClearTable(t)
     for key in pairs(t) do
         t[key] = nil
     end
+
+    t.n = 0
+end
+
+function ZugZug_GetOnlineMemberCount()
+    local count = 0
+
+    if not ZugZug.onlineMembers then
+        return count
+    end
+
+    for key, member in pairs(ZugZug.onlineMembers) do
+        if key ~= "n" and member and member.name then
+            count = count + 1
+        end
+    end
+
+    return count
 end
 
 function ZugZug_InitDB()
@@ -74,6 +93,10 @@ function ZugZug_InitDB()
         ZugZugDB.shareMyLocation = false
     end
 
+    if ZugZugDB.enableLFGNotifications == nil then
+        ZugZugDB.enableLFGNotifications = true
+    end
+
     if not ZugZugDB.window then
         ZugZugDB.window = {
             point = "CENTER",
@@ -99,6 +122,7 @@ function ZugZug_InitDB()
     ZugZug.capyChatLog = ZugZugDB.capyChatLog
     ZugZug.showGuildLocations = ZugZugDB.showGuildLocations
     ZugZug.shareMyLocation = ZugZugDB.shareMyLocation
+    ZugZug.enableLFGNotifications = ZugZugDB.enableLFGNotifications
 
     if not ZugZug.guildLocations then
         ZugZug.guildLocations = {}
@@ -198,6 +222,22 @@ function ZugZug_GetShareMyLocation()
     return false
 end
 
+function ZugZug_SetEnableLFGNotifications(enabled)
+    if not ZugZugDB then ZugZugDB = {} end
+    if enabled then
+        ZugZugDB.enableLFGNotifications = true
+        ZugZug.enableLFGNotifications = true
+    else
+        ZugZugDB.enableLFGNotifications = false
+        ZugZug.enableLFGNotifications = false
+    end
+end
+
+function ZugZug_GetEnableLFGNotifications()
+    if ZugZug.enableLFGNotifications == false then return false end
+    return true
+end
+
 function ZugZug_NormalizeClass(class)
     if not class or class == "" then return "" end
 
@@ -285,7 +325,7 @@ function ZugZug_AddCapyChatLog(sender, msg, className, source)
         at = time(),
     })
 
-    while table.getn(ZugZugDB.capyChatLog) > 120 do
+    while table.getn(ZugZugDB.capyChatLog) > (ZugZug.CAPY_CHAT_MAX_MESSAGES or 100) do
         table.remove(ZugZugDB.capyChatLog, 1)
     end
 
@@ -1065,6 +1105,7 @@ end
 function ZugZug_UpdateOnlineMembers()
     if not ZugZug.onlineMembers then
         ZugZug.onlineMembers = {}
+        ZugZug.onlineMembers.n = 0
     else
         ZugZug_ClearTable(ZugZug.onlineMembers)
     end
@@ -1079,23 +1120,28 @@ function ZugZug_UpdateOnlineMembers()
     if not numMembers then return end
 
     local i = 1
+    local onlineIndex = 1
+
     while i <= numMembers do
         local name, rank, rankIndex, level, class, zone, note, officerNote, online = GetGuildRosterInfo(i)
         if name and class and class ~= "" then
             ZugZug_SaveClassForName(name, class)
         end
         if online and name and string.lower(name) ~= string.lower(ZugZug.BOTNAME) then
-            table.insert(ZugZug.onlineMembers, {
+            ZugZug.onlineMembers[onlineIndex] = {
                 name = name,
                 class = class,
                 rank = rank,
                 rankIndex = rankIndex,
                 level = level,
                 zone = zone,
-            })
+            }
+            onlineIndex = onlineIndex + 1
         end
         i = i + 1
     end
+
+    ZugZug.onlineMembers.n = onlineIndex - 1
     ZugZug_SortOnlineMembers()
 end
 
@@ -1227,6 +1273,9 @@ function ZugZug_HandleLogin()
             ZugZug_Log("|cff00ffffOfficer|r access granted.")
         end
         ZugZug_BroadcastAddon("LOGIN~" .. ZugZug.VERSION)
+        if ZugZug_LFG_RequestSync then
+            ZugZug_LFG_RequestSync()
+        end
         ZugZug.READY = true
     else
         ZugZug_Log("Unfortunately you are not a member of |cff00ff00<" .. ZugZug.GUILD_NAME .. ">|r. Sorry you're lame.")

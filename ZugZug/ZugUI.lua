@@ -1072,7 +1072,7 @@ end
 local function ZugZug_UI_CreateCapyChatPanel(parent, width, height)
     local panel = ZugZug_UI_CreateCard(parent, width, height)
 
-    local title = ZugZug_UI_CreateText(panel, nil, "|cff69ccf0#capy-chat|r", "normal")
+    local title = ZugZug_UI_CreateText(panel, nil, "|cff69ccf0Discord #capy-chat|r", "normal")
     title:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -8)
 
     local chatFrame = CreateFrame("ScrollingMessageFrame", nil, panel)
@@ -1081,7 +1081,7 @@ local function ZugZug_UI_CreateCapyChatPanel(parent, width, height)
     chatFrame:SetHeight(height - 76)
     chatFrame:SetFontObject(GameFontHighlightSmall)
     chatFrame:SetJustifyH("LEFT")
-    chatFrame:SetMaxLines(160)
+    chatFrame:SetMaxLines(ZugZug.CAPY_CHAT_MAX_MESSAGES or 100)
     chatFrame:SetFading(false)
     chatFrame:EnableMouseWheel(true)
 
@@ -1361,6 +1361,12 @@ local function ZugZug_UI_CreateIdentityPanel(parent, width, height)
         prompt:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -34)
         prompt:SetWidth(width - 20)
         prompt:SetJustifyH("LEFT")
+
+        local verify = ZugZug_UI_CreateText(panel, nil, "|cffaaaaaaTo verify, run the |r|cff69ccf0/capy verify|r|cffaaaaaa command in Discord|r", "small")
+        verify:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -52)
+        verify:SetWidth(width - 20)
+        verify:SetJustifyH("LEFT")
+
         return panel
     end
 
@@ -1465,8 +1471,8 @@ local function ZugZug_UI_BuildDashboard(parent)
     title:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
 
     local onlineCount = 0
-    if ZugZug.onlineMembers then
-        onlineCount = table.getn(ZugZug.onlineMembers)
+    if ZugZug_GetOnlineMemberCount then
+        onlineCount = ZugZug_GetOnlineMemberCount()
     end
 
     local summary = ZugZug_UI_CreateText(parent, nil, "|cff00ff00Online:|r " .. tostring(onlineCount), "normal")
@@ -1887,6 +1893,11 @@ local function ZugZug_UI_BuildLFG(parent)
                 leaderRole = "DPS"
             end
 
+            local roleCounts = { TANK = 0, HEALER = 0, DPS = 0 }
+            if ZugZug_LFG_CountRoles then
+                roleCounts = ZugZug_LFG_CountRoles(listing)
+            end
+
             local titleText = "|cffffffff[" .. (listing.type or "Other") .. "]|r |cffffd100" .. (listing.target or "") .. "|r"
 
             local rowTitle = ZugZug_UI_CreateText(card, nil, titleText, "normal")
@@ -1901,19 +1912,19 @@ local function ZugZug_UI_BuildLFG(parent)
             local needTankIcon = ZugZug_UI_CreateRoleIcon(card, "TANK", 14)
             needTankIcon:SetPoint("TOPLEFT", card, "TOPLEFT", 166, -30)
 
-            local needTankText = ZugZug_UI_CreateText(card, nil, tostring(listing.needTank or 0), "small")
+            local needTankText = ZugZug_UI_CreateText(card, nil, tostring(roleCounts.TANK or 0) .. "/" .. tostring(listing.needTank or 0), "small")
             needTankText:SetPoint("LEFT", needTankIcon, "RIGHT", 2, 0)
 
             local needHealerIcon = ZugZug_UI_CreateRoleIcon(card, "HEALER", 14)
             needHealerIcon:SetPoint("LEFT", needTankText, "RIGHT", 7, 0)
 
-            local needHealerText = ZugZug_UI_CreateText(card, nil, tostring(listing.needHealer or 0), "small")
+            local needHealerText = ZugZug_UI_CreateText(card, nil, tostring(roleCounts.HEALER or 0) .. "/" .. tostring(listing.needHealer or 0), "small")
             needHealerText:SetPoint("LEFT", needHealerIcon, "RIGHT", 2, 0)
 
             local needDpsIcon = ZugZug_UI_CreateRoleIcon(card, "DPS", 14)
             needDpsIcon:SetPoint("LEFT", needHealerText, "RIGHT", 7, 0)
 
-            local needDpsText = ZugZug_UI_CreateText(card, nil, tostring(listing.needDps or 0), "small")
+            local needDpsText = ZugZug_UI_CreateText(card, nil, tostring(roleCounts.DPS or 0) .. "/" .. tostring(listing.needDps or 0), "small")
             needDpsText:SetPoint("LEFT", needDpsIcon, "RIGHT", 2, 0)
 
             local playerName = UnitName("player")
@@ -1926,6 +1937,11 @@ local function ZugZug_UI_BuildLFG(parent)
 
             if ZugZug_LFG_IsListingMember and ZugZug_LFG_IsListingMember(listing, playerName) then
                 isMember = true
+            end
+
+            local isFull = false
+            if ZugZug_LFG_IsListingFull and ZugZug_LFG_IsListingFull(listing) then
+                isFull = true
             end
 
             local memberX = 10
@@ -2041,30 +2057,51 @@ local function ZugZug_UI_BuildLFG(parent)
                 if not canJoinThis then
                     local busyText = ZugZug_UI_CreateText(card, nil, "|cff777777Already in LFG|r", "small")
                     busyText:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -10, 11)
+                elseif isFull then
+                    local fullText = ZugZug_UI_CreateText(card, nil, "|cff777777Full|r", "small")
+                    fullText:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -10, 11)
                 elseif ZugZug.UI.selectedJoinListingId == id then
                     local roleText = ZugZug_UI_CreateText(card, nil, "Join as:", "small")
                     roleText:SetPoint("BOTTOMLEFT", card, "BOTTOMLEFT", 10, 11)
 
-                    local joinTank = ZugZug_UI_CreateRoleChoiceButton(card, "TANK", false, 50, 20)
-                    joinTank:SetPoint("LEFT", roleText, "RIGHT", 6, 0)
-                    joinTank.lfgId = id
-                    joinTank:SetScript("OnClick", function()
-                        ZugZug_LFG_JoinListing(this.lfgId, "TANK")
-                    end)
+                    local last = roleText
+                    local added = false
 
-                    local joinHealer = ZugZug_UI_CreateRoleChoiceButton(card, "HEALER", false, 50, 20)
-                    joinHealer:SetPoint("LEFT", joinTank, "RIGHT", 4, 0)
-                    joinHealer.lfgId = id
-                    joinHealer:SetScript("OnClick", function()
-                        ZugZug_LFG_JoinListing(this.lfgId, "HEALER")
-                    end)
+                    if not ZugZug_LFG_IsRoleFull or not ZugZug_LFG_IsRoleFull(listing, "TANK") then
+                        local joinTank = ZugZug_UI_CreateRoleChoiceButton(card, "TANK", false, 50, 20)
+                        joinTank:SetPoint("LEFT", last, "RIGHT", 6, 0)
+                        joinTank.lfgId = id
+                        joinTank:SetScript("OnClick", function()
+                            ZugZug_LFG_JoinListing(this.lfgId, "TANK")
+                        end)
+                        last = joinTank
+                        added = true
+                    end
 
-                    local joinDps = ZugZug_UI_CreateRoleChoiceButton(card, "DPS", false, 50, 20)
-                    joinDps:SetPoint("LEFT", joinHealer, "RIGHT", 4, 0)
-                    joinDps.lfgId = id
-                    joinDps:SetScript("OnClick", function()
-                        ZugZug_LFG_JoinListing(this.lfgId, "DPS")
-                    end)
+                    if not ZugZug_LFG_IsRoleFull or not ZugZug_LFG_IsRoleFull(listing, "HEALER") then
+                        local joinHealer = ZugZug_UI_CreateRoleChoiceButton(card, "HEALER", false, 50, 20)
+                        joinHealer:SetPoint("LEFT", last, "RIGHT", 4, 0)
+                        joinHealer.lfgId = id
+                        joinHealer:SetScript("OnClick", function()
+                            ZugZug_LFG_JoinListing(this.lfgId, "HEALER")
+                        end)
+                        last = joinHealer
+                        added = true
+                    end
+
+                    if not ZugZug_LFG_IsRoleFull or not ZugZug_LFG_IsRoleFull(listing, "DPS") then
+                        local joinDps = ZugZug_UI_CreateRoleChoiceButton(card, "DPS", false, 50, 20)
+                        joinDps:SetPoint("LEFT", last, "RIGHT", 4, 0)
+                        joinDps.lfgId = id
+                        joinDps:SetScript("OnClick", function()
+                            ZugZug_LFG_JoinListing(this.lfgId, "DPS")
+                        end)
+                        added = true
+                    end
+
+                    if not added then
+                        roleText:SetText("|cff777777Full|r")
+                    end
                 else
                     local joinButton = ZugZug_UI_CreateButton(card, nil, "Join", 54, 20)
                     joinButton:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -8, 8)
@@ -2101,8 +2138,8 @@ local function ZugZug_UI_BuildGuild(parent)
     end
 
     local totalOnline = 0
-    if ZugZug.onlineMembers then
-        totalOnline = table.getn(ZugZug.onlineMembers)
+    if ZugZug_GetOnlineMemberCount then
+        totalOnline = ZugZug_GetOnlineMemberCount()
     end
 
     local sameZoneOnly = ZugZug_IsRosterSameZoneOnly()
@@ -2283,6 +2320,9 @@ local function ZugZug_UI_BuildSettings(parent)
     local title = ZugZug_UI_CreateText(parent, nil, "Settings", "large")
     title:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
 
+    local leftX = 0
+    local rightX = 330
+
     local savedRole = "DPS"
     if ZugZug_LFG_GetCreateRole then
         savedRole = ZugZug_LFG_GetCreateRole()
@@ -2291,10 +2331,10 @@ local function ZugZug_UI_BuildSettings(parent)
     end
 
     local roleTitle = ZugZug_UI_CreateText(parent, nil, "Preferred Role", "normal")
-    roleTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -34)
+    roleTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -34)
 
     local tankButton = ZugZug_UI_CreateRoleChoiceButton(parent, "TANK", savedRole == "TANK", 82, 24)
-    tankButton:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -56)
+    tankButton:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -56)
     tankButton:SetScript("OnClick", function()
         if ZugZug_LFG_SetCreateRole then
             ZugZug_LFG_SetCreateRole("TANK")
@@ -2329,8 +2369,40 @@ local function ZugZug_UI_BuildSettings(parent)
         ZugZug_UI_ShowTab("settings")
     end)
 
+    local lfgTitle = ZugZug_UI_CreateText(parent, nil, "LFG", "normal")
+    lfgTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -96)
+
+    local lfgNotifications = true
+    if ZugZug_GetEnableLFGNotifications then
+        lfgNotifications = ZugZug_GetEnableLFGNotifications()
+    end
+
+    local lfgNotifyCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    lfgNotifyCheck:SetWidth(24)
+    lfgNotifyCheck:SetHeight(24)
+    lfgNotifyCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX - 4, -114)
+
+    if lfgNotifications then
+        lfgNotifyCheck:SetChecked(1)
+    else
+        lfgNotifyCheck:SetChecked(nil)
+    end
+
+    lfgNotifyCheck:SetScript("OnClick", function()
+        if this:GetChecked() then
+            ZugZug_SetEnableLFGNotifications(true)
+        else
+            ZugZug_SetEnableLFGNotifications(false)
+        end
+
+        ZugZug_UI_ShowTab("settings")
+    end)
+
+    local lfgNotifyText = ZugZug_UI_CreateText(parent, nil, "Enable LFG Notifications", "normal")
+    lfgNotifyText:SetPoint("LEFT", lfgNotifyCheck, "RIGHT", 0, 1)
+
     local loginTitle = ZugZug_UI_CreateText(parent, nil, "Startup", "normal")
-    loginTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -84)
+    loginTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", rightX, -34)
 
     local showOnLogin = false
     if ZugZug_GetShowWindowOnLogin then
@@ -2340,7 +2412,7 @@ local function ZugZug_UI_BuildSettings(parent)
     local loginCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     loginCheck:SetWidth(24)
     loginCheck:SetHeight(24)
-    loginCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", -4, -98)
+    loginCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", rightX - 4, -52)
 
     if showOnLogin then
         loginCheck:SetChecked(1)
@@ -2361,8 +2433,8 @@ local function ZugZug_UI_BuildSettings(parent)
     local loginText = ZugZug_UI_CreateText(parent, nil, "Show window on login", "normal")
     loginText:SetPoint("LEFT", loginCheck, "RIGHT", 0, 1)
 
-        local locationTitle = ZugZug_UI_CreateText(parent, nil, "Guild Location", "normal")
-    locationTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -136)
+    local locationTitle = ZugZug_UI_CreateText(parent, nil, "Guild Location", "normal")
+    locationTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", rightX, -90)
 
     local showLocations = false
     if ZugZug_GetShowGuildLocations then
@@ -2372,7 +2444,7 @@ local function ZugZug_UI_BuildSettings(parent)
     local showCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     showCheck:SetWidth(24)
     showCheck:SetHeight(24)
-    showCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", -4, -154)
+    showCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", rightX - 4, -108)
 
     if showLocations then
         showCheck:SetChecked(1)
@@ -2402,7 +2474,7 @@ local function ZugZug_UI_BuildSettings(parent)
     local shareCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     shareCheck:SetWidth(24)
     shareCheck:SetHeight(24)
-    shareCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", -4, -180)
+    shareCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", rightX - 4, -134)
 
     if shareLocation then
         shareCheck:SetChecked(1)
