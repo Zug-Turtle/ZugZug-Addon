@@ -52,6 +52,14 @@ To verify, run this command in Discord:
 
 Verification is not required to use the whole addon, but it unlocks extra identity/character features.
 
+## Location Sharing 
+
+You can choose to share your location with guildies, and see other guildies' locations on your map.
+
+They will appear as squares colored to their class, only available when viewing the location they are in.
+
+They do not show up on your minimap.
+
 ## Settings
 
 The Settings tab lets you adjust a few personal preferences.
@@ -62,8 +70,6 @@ You can set:
 - Whether LFG notifications are enabled
 - Whether the Zug Zug addon window opens on login
 - Guild location display options
-
-### Settings
 
 ![Settings](.github/assets/settings.png)
 
