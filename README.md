@@ -2,11 +2,10 @@
 
 This is a guild addon for our members of our guild on **1.12.1** clients.
 
-It brings a few guild tools into one simple in-game window: a dashboard, real-time Discord #capy-chat, guild LFG, online roster, verified character info, and a few settings to make the addon feel right for you.
-
 Open it in game with: 
 
 `/zug` or `/zz`
+
 
 ## Dashboard
 A quick overview of guild info, #capy-chat from Discord, and Shellcoin / Darkmoon Faire information.
