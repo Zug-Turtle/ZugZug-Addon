@@ -1,7 +1,7 @@
 ZugZug = {}
 ZugZug.NAME = "ZugZug"
 ZugZug.BOTNAME = "Zugbot"
-ZugZug.VERSION = "0.1.0"
+ZugZug.VERSION = "0.1.1"
 ZugZug.GUILD_NAME = "Zug Zug"
 ZugZug.PREFIX = "ZUGZUG"
 ZugZug.DISCORD = "https://discord.gg/cG27gCEK4c"
@@ -21,6 +21,7 @@ ZugZug.CLASS_COLORS = {
 ZugZug.CHUNK_SIZE = 170
 ZugZug.MAX_RAW_SIZE = 230
 ZugZug.CHUNK_TIMEOUT = 30
+ZugZug.MAX_INCOMING_CHUNKS = 80
 ZugZug.chunkSeq = 0
 ZugZug.minimapAngle = 225
 ZugZug.incomingChunks = {}
@@ -35,6 +36,14 @@ ZugZug.locationPins = {}
 
 
 function ZugZug_Log(msg) print("|cff00ff00[ZugZug]|r " .. msg) end
+
+function ZugZug_ClearTable(t)
+    if not t then return end
+
+    for key in pairs(t) do
+        t[key] = nil
+    end
+end
 
 function ZugZug_InitDB()
     if not ZugZugDB then ZugZugDB = {} end
@@ -793,6 +802,50 @@ local function ZugZug_CleanupChunks()
     end
 end
 
+local function ZugZug_CountIncomingChunks()
+    local count = 0
+
+    for key in pairs(ZugZug.incomingChunks) do
+        count = count + 1
+    end
+
+    return count
+end
+
+local function ZugZug_TrimIncomingChunks()
+    local max = tonumber(ZugZug.MAX_INCOMING_CHUNKS or 80) or 80
+    local count = ZugZug_CountIncomingChunks()
+
+    if max < 1 then
+        max = 1
+    end
+
+    while count >= max do
+        local oldestKey = nil
+        local oldestAt = nil
+
+        for key, entry in pairs(ZugZug.incomingChunks) do
+            local created = 0
+
+            if entry and entry.created then
+                created = tonumber(entry.created) or 0
+            end
+
+            if not oldestKey or created < oldestAt then
+                oldestKey = key
+                oldestAt = created
+            end
+        end
+
+        if not oldestKey then
+            return
+        end
+
+        ZugZug.incomingChunks[oldestKey] = nil
+        count = count - 1
+    end
+end
+
 local function ZugZug_HandleChunk(data, sender)
     ZugZug_CleanupChunks()
 
@@ -818,6 +871,8 @@ local function ZugZug_HandleChunk(data, sender)
     local key = tostring(sender or "UNKNOWN") .. ":" .. chunkId
 
     if not ZugZug.incomingChunks[key] then
+        ZugZug_TrimIncomingChunks()
+
         ZugZug.incomingChunks[key] = {
             total = total,
             count = 0,
@@ -1008,7 +1063,12 @@ function ZugZug_SortOnlineMembers()
 end
 
 function ZugZug_UpdateOnlineMembers()
-    ZugZug.onlineMembers = {}
+    if not ZugZug.onlineMembers then
+        ZugZug.onlineMembers = {}
+    else
+        ZugZug_ClearTable(ZugZug.onlineMembers)
+    end
+
     if not IsInGuild() then return end
     if not GetNumGuildMembers or not GetGuildRosterInfo then return end
     if not ZugZugDB then ZugZugDB = {} end

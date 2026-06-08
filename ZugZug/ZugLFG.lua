@@ -66,6 +66,26 @@ local function ZugZug_LFG_Split(text, delim)
     return result
 end
 
+local function ZugZug_LFG_RefreshUIImmediate()
+    if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
+        if ZugZug_UI_RefreshActiveTab then
+            ZugZug_UI_RefreshActiveTab()
+        else
+            ZugZug_UI_ShowTab("lfg")
+        end
+    end
+end
+
+local function ZugZug_LFG_RefreshUIThrottled(reason)
+    if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
+        if ZugZug_UI_RefreshActiveTabThrottled then
+            ZugZug_UI_RefreshActiveTabThrottled(reason or "lfg", 0.25)
+        else
+            ZugZug_UI_ShowTab("lfg")
+        end
+    end
+end
+
 local function ZugZug_LFG_NewId()
     return UnitName("player") .. tostring(time())
 end
@@ -497,9 +517,7 @@ function ZugZug_LFG_SetListingMemberRole(id, name, role)
             ZugZug.LFG.currentCreateRole = role
         end
         ZugZug_LFG_BroadcastListing(listing)
-        if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-            ZugZug_UI_ShowTab("lfg")
-        end
+        ZugZug_LFG_RefreshUIImmediate()
     end
 end
 function ZugZug_LFG_CycleListingMemberRole(id, name)
@@ -547,9 +565,7 @@ function ZugZug_LFG_RequestMyRoleChange(id, role)
         .. ZugZug_LFG_Encode(role)
     )
 
-    if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-        ZugZug_UI_ShowTab("lfg")
-    end
+    ZugZug_LFG_RefreshUIImmediate()
 end
 
 function ZugZug_LFG_IsExpectedInvite(inviter)
@@ -801,9 +817,7 @@ function ZugZug_LFG_CreateListing(target, note)
     ZugZug.LFG.showCreatePanel = false
     ZugZug.LFG.currentCreateNote = ""
 
-    if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-        ZugZug_UI_ShowTab("lfg")
-    end
+    ZugZug_LFG_RefreshUIImmediate()
 end
 
 function ZugZug_LFG_CloseListing(id)
@@ -822,9 +836,7 @@ function ZugZug_LFG_CloseListing(id)
 
     ZugZug_BroadcastAddon("LFG_CLOSE~" .. ZugZug_LFG_Encode(id))
 
-    if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-        ZugZug_UI_ShowTab("lfg")
-    end
+    ZugZug_LFG_RefreshUIImmediate()
 end
 
 function ZugZug_LFG_JoinListing(id, role)
@@ -845,9 +857,7 @@ function ZugZug_LFG_JoinListing(id, role)
         ZugZug_Log("You are already in a guild LFG.")
         ZugZug.UI.selectedJoinListingId = nil
 
-        if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-            ZugZug_UI_ShowTab("lfg")
-        end
+        ZugZug_LFG_RefreshUIImmediate()
 
         return
     end
@@ -871,9 +881,7 @@ function ZugZug_LFG_JoinListing(id, role)
     ZugZug.UI.selectedJoinListingId = nil
     ZugZug_Log("Join request sent to " .. listing.leader .. ".")
 
-    if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-        ZugZug_UI_ShowTab("lfg")
-    end
+    ZugZug_LFG_RefreshUIImmediate()
 end
 
 function ZugZug_LFG_LeaveListing(id)
@@ -887,9 +895,7 @@ function ZugZug_LFG_LeaveListing(id)
 
     ZugZug_BroadcastAddon("LFG_LEAVE~" .. ZugZug_LFG_Encode(id))
 
-    if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-        ZugZug_UI_ShowTab("lfg")
-    end
+    ZugZug_LFG_RefreshUIImmediate()
 end
 
 function ZugZug_LFG_HandleMessage(cmd, data, sender)
@@ -904,9 +910,7 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
 
         ZugZug.LFG.listings[listing.id] = listing
 
-        if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-            ZugZug_UI_ShowTab("lfg")
-        end
+        ZugZug_LFG_RefreshUIThrottled("lfg_upsert")
 
         return
     end
@@ -920,9 +924,7 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
             end
         end
 
-        if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-            ZugZug_UI_ShowTab("lfg")
-        end
+        ZugZug_LFG_RefreshUIThrottled("lfg_close")
 
         return
     end
@@ -982,9 +984,7 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
             if ZugZug_LFG_SetLocalMemberRole(listing, sender, role) then
                 ZugZug_LFG_BroadcastListing(listing)
 
-                if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-                    ZugZug_UI_ShowTab("lfg")
-                end
+                ZugZug_LFG_RefreshUIThrottled("lfg_role_request")
             end
         end
 
@@ -1003,9 +1003,7 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
             end
         end
 
-        if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-            ZugZug_UI_ShowTab("lfg")
-        end
+        ZugZug_LFG_RefreshUIThrottled("lfg_leave")
 
         return
     end
@@ -1110,8 +1108,8 @@ function ZugZug_LFG_CheckPendingJoins()
         end
     end
 
-    if changed and ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-        ZugZug_UI_ShowTab("lfg")
+    if changed then
+        ZugZug_LFG_RefreshUIThrottled("lfg_pending_joins")
     end
 end
 
@@ -1126,9 +1124,7 @@ function ZugZug_LFG_OnPartyChanged()
         end
     end
 
-    if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-        ZugZug_UI_ShowTab("lfg")
-    end
+    ZugZug_LFG_RefreshUIThrottled("lfg_party_changed")
 end
 
 function ZugZug_LFG_OnUpdate()
@@ -1152,7 +1148,13 @@ function ZugZug_LFG_StartTicker()
     if ZugZug.LFG.ticker then return end
 
     local frame = CreateFrame("Frame")
+    frame.elapsed = 0
+
     frame:SetScript("OnUpdate", function()
+        this.elapsed = (this.elapsed or 0) + arg1
+        if this.elapsed < 3 then return end
+        this.elapsed = 0
+
         ZugZug_LFG_OnUpdate()
     end)
 

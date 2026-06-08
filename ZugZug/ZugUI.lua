@@ -183,6 +183,10 @@ local function ZugZug_UI_CreateCleanEditBox(parent, width, height, text)
     edit:SetMaxLetters(120)
     edit:SetScript("OnEscapePressed", function()
         this:ClearFocus()
+
+        if ZugZug_UI_Hide and ZugZug.UI and ZugZug.UI.frame and ZugZug.UI.frame:IsShown() then
+            ZugZug_UI_Hide()
+        end
     end)
 
     box.edit = edit
@@ -724,6 +728,24 @@ local function ZugZug_UI_CreateMainFrame()
     close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -5, -5)
     frame.close = close
 
+    if UISpecialFrames then
+        local found = false
+        local i = 1
+
+        while UISpecialFrames[i] do
+            if UISpecialFrames[i] == "ZugZugMainFrame" then
+                found = true
+                break
+            end
+
+            i = i + 1
+        end
+
+        if not found then
+            table.insert(UISpecialFrames, "ZugZugMainFrame")
+        end
+    end
+
     local tabBar = CreateFrame("Frame", nil, frame)
     tabBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -48)
     tabBar:SetWidth(ZUG_UI_WIDTH - 32)
@@ -891,12 +913,74 @@ function ZugZug_UI_ShowTab(key)
 
             ZugZug_UI_ClearPage(tab.page)
             tab.buildFunc(tab.page)
+
+            ZugZug.UI.refreshCount = (ZugZug.UI.refreshCount or 0) + 1
         else
             tab.page:Hide()
             ZugZug_UI_SetTabSelected(tab, false)
         end
         i = i + 1
     end
+end
+
+function ZugZug_UI_RefreshActiveTab()
+    if not ZugZug.UI then return end
+    if not ZugZug.UI.activeTab then return end
+
+    local frame = ZugZug.UI.frame
+    if not frame or not frame:IsShown() then return end
+
+    if ZugZug.UI.refreshScheduled and ZugZug.UI.refreshTickerFrame then
+        ZugZug.UI.refreshTickerFrame:SetScript("OnUpdate", nil)
+        ZugZug.UI.refreshScheduled = nil
+        ZugZug.UI.refreshDelay = nil
+    end
+
+    ZugZug_UI_ShowTab(ZugZug.UI.activeTab)
+end
+
+function ZugZug_UI_RefreshActiveTabThrottled(reason, delay)
+    if not ZugZug.UI then return end
+    if not ZugZug.UI.activeTab then return end
+
+    local frame = ZugZug.UI.frame
+    if not frame or not frame:IsShown() then return end
+
+    delay = tonumber(delay or 0.25) or 0.25
+    if delay < 0 then delay = 0 end
+
+    ZugZug.UI.pendingRefreshReason = reason or "unknown"
+
+    if ZugZug.UI.refreshScheduled then
+        if delay < (ZugZug.UI.refreshDelay or delay) then
+            ZugZug.UI.refreshDelay = delay
+        end
+        return
+    end
+
+    local ticker = ZugZug.UI.refreshTickerFrame
+    if not ticker then
+        ticker = CreateFrame("Frame")
+        ZugZug.UI.refreshTickerFrame = ticker
+    end
+
+    ticker.elapsed = 0
+    ZugZug.UI.refreshDelay = delay
+    ZugZug.UI.refreshScheduled = true
+
+    ticker:SetScript("OnUpdate", function()
+        this.elapsed = (this.elapsed or 0) + arg1
+
+        if this.elapsed < (ZugZug.UI.refreshDelay or 0.25) then
+            return
+        end
+
+        this:SetScript("OnUpdate", nil)
+        ZugZug.UI.refreshScheduled = nil
+        ZugZug.UI.refreshDelay = nil
+
+        ZugZug_UI_RefreshActiveTab()
+    end)
 end
 
 function ZugZug_UI_Show()
@@ -1022,6 +1106,7 @@ local function ZugZug_UI_CreateCapyChatPanel(parent, width, height)
         local text = input:GetText() or ""
         if ZugZug_SendCapyChatMessage and ZugZug_SendCapyChatMessage(text) then
             input:SetText("")
+            input:ClearFocus()
             if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
                 ZugZug_UI_ShowTab("dashboard")
             end
