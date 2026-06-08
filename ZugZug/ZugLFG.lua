@@ -957,17 +957,20 @@ function ZugZug_LFG_AdjustNeed(role, amount)
 end
 
 function ZugZug_LFG_BroadcastListing(listing)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
     if not listing then return end
     ZugZug_BroadcastAddon("LFG_UPSERT~" .. ZugZug_LFG_EncodeListing(listing))
 end
 
 function ZugZug_LFG_RequestSync()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
     local player = UnitName("player")
     if not player or player == "" then return end
     ZugZug_BroadcastAddon("LFG_SYNC_REQ~" .. ZugZug_LFG_Encode(player))
 end
 
 function ZugZug_LFG_SendSyncResponse(target, listing)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
     if not target or target == "" then return end
     if not listing then return end
 
@@ -1240,7 +1243,6 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
         local listing = ZugZug.LFG.listings[id]
         if not listing then return end
 
-        -- Only the current listing keeper invites and later confirms the member.
         if sender and sender ~= UnitName("player") and ZugZug_LFG_ShouldOwnListing(listing) then
             if listing.leader ~= UnitName("player") then
                 ZugZug_LFG_AssumeListingOwnership(listing)
@@ -1280,7 +1282,6 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
         local listing = ZugZug.LFG.listings[id]
         if not listing then return end
 
-        -- Only the current keeper accepts role changes, and only for actual party/raid members.
         if sender and ZugZug_LFG_IsInMyPartyOrRaid(sender) and ZugZug_LFG_ShouldOwnListing(listing) then
             if listing.leader ~= UnitName("player") then
                 ZugZug_LFG_AssumeListingOwnership(listing)
@@ -1318,6 +1319,8 @@ function ZugZug_LFG_HandleMessage(cmd, data, sender)
 end
 
 function ZugZug_LFG_SyncToGuild()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
+
     local player = UnitName("player")
     if not player then return end
 
@@ -1459,6 +1462,8 @@ function ZugZug_LFG_OnPartyChanged()
 end
 
 function ZugZug_LFG_OnUpdate()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
+
     ZugZug_LFG_PruneExpired()
     if ZugZug_LFG_MaintainListingOwnership then
         ZugZug_LFG_MaintainListingOwnership()
@@ -1479,12 +1484,17 @@ function ZugZug_LFG_OnUpdate()
 end
 
 function ZugZug_LFG_StartTicker()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
     if ZugZug.LFG.ticker then return end
 
     local frame = CreateFrame("Frame")
     frame.elapsed = 0
 
     frame:SetScript("OnUpdate", function()
+        if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
+            return
+        end
+
         this.elapsed = (this.elapsed or 0) + arg1
         if this.elapsed < 3 then return end
         this.elapsed = 0

@@ -70,8 +70,31 @@ local function ZugZug_ShowPerf()
     )
 end
 
+local function ZugZug_IsReadyGuildMember()
+    if ZugZug_IsGuildAllowed and ZugZug_IsGuildAllowed() then
+        return ZugZug.READY
+    end
+
+    if ZugZug_DisableForNonGuild then
+        ZugZug_DisableForNonGuild()
+    end
+
+    return false
+end
+
+local function ZugZug_BlockNonGuildCommand()
+    if ZugZug_IsReadyGuildMember() then
+        return false
+    end
+
+    ZugZug_Log("ZugZug is only available to |cff00ff00<" .. ZugZug.GUILD_NAME .. ">|r guild members.")
+    return true
+end
+
 local function ZugZug_OnSlashCommand(msg)
     local cmd, args = ZugZug_ParseCommand(msg)
+
+    if ZugZug_BlockNonGuildCommand() then return end
 
     if cmd == "" then ZugZug_UI_Toggle() return end
     if cmd == "perf" then ZugZug_ShowPerf() return end
@@ -97,6 +120,7 @@ local function ZugZug_OnAddonMessage()
     if sender == UnitName("player") then return end
     if not prefix or prefix ~= ZugZug.PREFIX then return end
     if not message or message == "" then return end
+    if not ZugZug_IsReadyGuildMember() then return end
 
     message = ZugZug_RebuildIncomingMessage(message, sender)
     if not message then return end
@@ -233,6 +257,40 @@ local function ZugZug_RefreshDashboardMOTD(throttleReason)
     return changed
 end
 
+local function ZugZug_RunGuildStartup()
+    if ZugZug.guildStartupComplete then
+        return ZugZug_IsReadyGuildMember()
+    end
+
+    if ZugZug.guildStartupRunning then
+        return ZugZug.READY
+    end
+
+    ZugZug.guildStartupRunning = true
+
+    if not ZugZug_HandleLogin() then
+        ZugZug.guildStartupRunning = false
+        return false
+    end
+
+    ZugZug_UI_RegisterDefaultTabs()
+    ZugZug_UI_CreateMinimapButton()
+    ZugZug_RefreshDashboardMOTD()
+    ZugZug_LFG_StartTicker()
+
+    if ZugZug_Location_StartTicker then
+        ZugZug_Location_StartTicker()
+    end
+
+    if ZugZug_GetShowWindowOnLogin and ZugZug_GetShowWindowOnLogin() then
+        ZugZug_UI_Show()
+    end
+
+    ZugZug.guildStartupComplete = true
+    ZugZug.guildStartupRunning = false
+    return true
+end
+
 local zug = CreateFrame("Frame")
 zug:RegisterEvent("PLAYER_LOGIN")
 zug:RegisterEvent("PLAYER_LOGOUT")
@@ -249,14 +307,41 @@ zug:RegisterEvent("PARTY_INVITE_REQUEST")
 zug:RegisterEvent("PARTY_MEMBERS_CHANGED")
 zug:RegisterEvent("RAID_ROSTER_UPDATE")
 pcall(function()
+    zug:RegisterEvent("PLAYER_GUILD_UPDATE")
+end)
+pcall(function()
     zug:RegisterEvent("GUILD_MOTD")
 end)
 
 zug:SetScript("OnEvent", function()
     if event == "VARIABLES_LOADED" then
         ZugZug_InitDB()
-        ZugZug_UI_CreateMinimapButton()
+    elseif event == "PLAYER_GUILD_UPDATE" then
+        if not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
+            if ZugZug_DisableForNonGuild then
+                ZugZug_DisableForNonGuild()
+            end
+            return
+        end
+
+        if not ZugZug.READY and not ZugZug.guildStartupComplete then
+            ZugZug_RunGuildStartup()
+        end
     elseif event == "GUILD_ROSTER_UPDATE" then 
+        if not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
+            if ZugZug_DisableForNonGuild then
+                ZugZug_DisableForNonGuild()
+            end
+            return
+        end
+
+        if not ZugZug.READY then
+            if not ZugZug.guildStartupComplete then
+                ZugZug_RunGuildStartup()
+            end
+            return
+        end
+
         ZugZug_RefreshDashboardMOTD("guild_roster_motd")
         ZugZug_UpdateOnlineMembers()
         if ZugZug_LFG_PruneOffline then
@@ -267,33 +352,27 @@ zug:SetScript("OnEvent", function()
             ZugZug_UI_RefreshActiveTabThrottled("guild_roster", 0.25)
         end
     elseif event == "PLAYER_LOGIN" then
-        ZugZug_Wait(1, function() 
-            ZugZug_HandleLogin()
-            ZugZug_UI_RegisterDefaultTabs()
-            ZugZug_RefreshDashboardMOTD()
-            ZugZug_LFG_StartTicker()
-            if ZugZug_Location_StartTicker then
-                ZugZug_Location_StartTicker()
-            end
-
-            if ZugZug_GetShowWindowOnLogin and ZugZug_GetShowWindowOnLogin() then
-                ZugZug_UI_Show()
-            end
+        ZugZug_Wait(1, function()
+            ZugZug_RunGuildStartup()
         end)
     elseif event == "GUILD_MOTD" then
+        if not ZugZug_IsReadyGuildMember() then return end
         ZugZug_RefreshDashboardMOTD()
     elseif event == "PLAYER_LOGOUT" then
         return
     elseif event == "CHAT_MSG_ADDON" then
+        if not ZugZug_IsReadyGuildMember() then return end
         ZugZug_OnAddonMessage()
 
     elseif event == "CHAT_MSG_GUILD" then
+        if not ZugZug_IsReadyGuildMember() then return end
         local msg = arg1
         local sender = arg2
         if sender and msg then
             ZugZug_AddGuildChatLog(sender, msg)
         end
     elseif event == "CHAT_MSG_OFFICER" then
+        if not ZugZug_IsReadyGuildMember() then return end
         local msg = arg1
         local sender = arg2
 
@@ -305,14 +384,17 @@ zug:SetScript("OnEvent", function()
             end
         end
     elseif event == "PARTY_INVITE_REQUEST" then
+        if not ZugZug_IsReadyGuildMember() then return end
         if ZugZug_LFG_HandlePartyInvite then
             ZugZug_LFG_HandlePartyInvite(arg1)
         end
     elseif event == "PARTY_MEMBERS_CHANGED" or event == "RAID_ROSTER_UPDATE" then
+        if not ZugZug_IsReadyGuildMember() then return end
         if ZugZug_LFG_OnPartyChanged then
             ZugZug_LFG_OnPartyChanged()
         end
     elseif event == "ZONE_CHANGED" or event == "ZONE_CHANGED_NEW_AREA" or event == "ZONE_CHANGED_INDOORS" then
+        if not ZugZug_IsReadyGuildMember() then return end
         if ZugZug.UI and ZugZug.UI.activeTab == "guild" then
             if ZugZug_UI_RefreshActiveTabThrottled then
                 ZugZug_UI_RefreshActiveTabThrottled("zone_changed", 0.25)

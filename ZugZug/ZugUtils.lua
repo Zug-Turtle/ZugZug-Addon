@@ -5,6 +5,7 @@ ZugZug.VERSION = "0.1.1"
 ZugZug.GUILD_NAME = "Zug Zug"
 ZugZug.PREFIX = "ZUGZUG"
 ZugZug.DISCORD = "https://discord.gg/cG27gCEK4c"
+ZugZug.READY = false
 
 ZugZug.CLASS_COLORS = {
     ["Warrior"] = "ffc79c6e",
@@ -37,6 +38,55 @@ ZugZug.locationPins = {}
 
 
 function ZugZug_Log(msg) print("|cff00ff00[ZugZug]|r " .. msg) end
+
+function ZugZug_IsGuildAllowed()
+    if not IsInGuild or not IsInGuild() then
+        return false
+    end
+
+    if not GetGuildInfo then
+        return false
+    end
+
+    local guildName = GetGuildInfo("player")
+    if guildName == ZugZug.GUILD_NAME then
+        return true
+    end
+
+    return false
+end
+
+function ZugZug_DisableForNonGuild()
+    ZugZug.READY = false
+
+    if ZugZug.UI then
+        if ZugZug.UI.frame then
+            ZugZug.UI.frame:Hide()
+        end
+
+        if ZugZug.UI.minimapButton then
+            ZugZug.UI.minimapButton:Hide()
+        end
+
+        if ZugZug.UI.refreshTickerFrame then
+            ZugZug.UI.refreshTickerFrame:SetScript("OnUpdate", nil)
+        end
+
+        ZugZug.UI.activeTab = nil
+        ZugZug.UI.refreshScheduled = nil
+        ZugZug.UI.refreshDelay = nil
+    end
+
+    if ZugZug.LFG and ZugZug.LFG.ticker then
+        ZugZug.LFG.ticker:SetScript("OnUpdate", nil)
+        ZugZug.LFG.ticker = nil
+    end
+
+    if ZugZug.locationTicker then
+        ZugZug.locationTicker:SetScript("OnUpdate", nil)
+        ZugZug.locationTicker = nil
+    end
+end
 
 function ZugZug_ClearTable(t)
     if not t then return end
@@ -611,6 +661,8 @@ function ZugZug_AddCapyChatFromSendPayload(sender, payload)
 end
 
 function ZugZug_SendCapyChatMessage(msg)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return false end
+
     msg = ZugZug_NormalizeString(msg)
     if not msg then return false end
 
@@ -777,6 +829,7 @@ end
 function ZugZug_SendAddon(msg, channel)
     if not msg then return end
     if not channel then channel = "GUILD" end
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
 
     local maxRaw = ZugZug.MAX_RAW_SIZE - string.len(ZugZug.PREFIX)
     if string.len(msg) <= maxRaw then
@@ -796,10 +849,18 @@ function ZugZug_SendAddon(msg, channel)
     end
 end
 
-function ZugZug_BroadcastAddon(msg) ZugZug_SendAddon(msg, "GUILD") end
-function ZugZug_SendBotWhisper(msg) SendChatMessage(ZugZug.PREFIX .. "~" .. msg, "WHISPER", nil, ZugZug.BOTNAME) end
+function ZugZug_BroadcastAddon(msg)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
+    ZugZug_SendAddon(msg, "GUILD")
+end
+
+function ZugZug_SendBotWhisper(msg)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
+    SendChatMessage(ZugZug.PREFIX .. "~" .. msg, "WHISPER", nil, ZugZug.BOTNAME)
+end
 
 function ZugZug_SendBotCommand(command)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
     command = ZugZug_NormalizeString(command)
     if not command then return end
     SendChatMessage("@" .. command, "WHISPER", nil, ZugZug.BOTNAME)
@@ -1258,12 +1319,17 @@ function ZugZug_FormatTimeRemaining(timestamp)
 end
 
 function ZugZug_HandleLogin()
-    if not IsInGuild() then
+    if not IsInGuild or not IsInGuild() then
+        ZugZug_DisableForNonGuild()
         ZugZug_Log("You are not in a guild! Join |cff00ff00<" .. ZugZug.GUILD_NAME .. ">|r to use this addon.")
-        return
+        return false
     end
+
     local guildName, guildRank, guildRankIndex = GetGuildInfo("player")
     if guildName == ZugZug.GUILD_NAME then
+        guildRank = guildRank or "Guildie"
+        ZugZug.READY = true
+
         if GuildRoster then GuildRoster() end
         ZugZug_RecordAddonUser(UnitName("player"), ZugZug.VERSION)
         ZugZug_UpdateOnlineMembers()
@@ -1276,9 +1342,11 @@ function ZugZug_HandleLogin()
         if ZugZug_LFG_RequestSync then
             ZugZug_LFG_RequestSync()
         end
-        ZugZug.READY = true
+        return true
     else
+        ZugZug_DisableForNonGuild()
         ZugZug_Log("Unfortunately you are not a member of |cff00ff00<" .. ZugZug.GUILD_NAME .. ">|r. Sorry you're lame.")
+        return false
     end
 end
 
@@ -1357,8 +1425,8 @@ local function ZugZug_GetMyMapPositionSafe()
 end
 
 function ZugZug_BroadcastMyLocation()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
     if not ZugZug_GetShareMyLocation or not ZugZug_GetShareMyLocation() then return end
-    if not IsInGuild or not IsInGuild() then return end
 
     local mapFile, zone, x, y = ZugZug_GetMyMapPositionSafe()
 
@@ -1605,6 +1673,7 @@ function ZugZug_Map_UpdateGuildPins()
 end
 
 function ZugZug_Location_StartTicker()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
     if ZugZug.locationTicker then return end
 
     local frame = CreateFrame("Frame")
@@ -1612,6 +1681,10 @@ function ZugZug_Location_StartTicker()
     frame.lastPinUpdate = 0
 
     frame:SetScript("OnUpdate", function()
+        if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
+            return
+        end
+
         local now = GetTime()
 
         if now - (this.lastBroadcast or 0) >= (ZugZug.locationBroadcastInterval or 5) then
@@ -1630,6 +1703,8 @@ end
 
 -- Advertising Macro if you wanna use it (mostly for Cows lol): /run ZugZugAdvertiseEnglish()
 function ZugZugAdvertiseEnglish()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
+
     local msg = "<" .. ZugZug.GUILD_NAME .. ">! English guild LFM! Previously 4k+ on Turtle, rebuilding here!"
         .. " Custom in-game NPC, Discord lvl tracking, custom tools, and more! Whisper 'inv' to " .. ZugZug.BOTNAME
         .. " for an invite. Join our Discord @ " .. ZugZug.DISCORD .. " !"

@@ -903,6 +903,13 @@ function ZugZug_UI_RegisterTab(key, label, buildFunc)
 end
 
 function ZugZug_UI_ShowTab(key)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
+        if ZugZug_DisableForNonGuild then
+            ZugZug_DisableForNonGuild()
+        end
+        return
+    end
+
     local i = 1
     while i <= table.getn(ZugZug.UI.tabs) do
         local tab = ZugZug.UI.tabs[i]
@@ -984,6 +991,13 @@ function ZugZug_UI_RefreshActiveTabThrottled(reason, delay)
 end
 
 function ZugZug_UI_Show()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
+        if ZugZug_DisableForNonGuild then
+            ZugZug_DisableForNonGuild()
+        end
+        return
+    end
+
     local frame = ZugZug_UI_GetFrame()
     frame:Show()
 
@@ -995,11 +1009,19 @@ function ZugZug_UI_Show()
 end
 
 function ZugZug_UI_Hide()
-    local frame = ZugZug_UI_GetFrame()
-    frame:Hide()
+    if ZugZug.UI and ZugZug.UI.frame then
+        ZugZug.UI.frame:Hide()
+    end
 end
 
 function ZugZug_UI_Toggle()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
+        if ZugZug_DisableForNonGuild then
+            ZugZug_DisableForNonGuild()
+        end
+        return
+    end
+
     local frame = ZugZug_UI_GetFrame()
 
     if frame:IsShown() then
@@ -2768,7 +2790,17 @@ local function ZugZug_UI_UpdateMinimapButtonPosition()
 end
 
 function ZugZug_UI_CreateMinimapButton()
-    if ZugZug.UI.minimapButton then return end
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
+        if ZugZug.UI and ZugZug.UI.minimapButton then
+            ZugZug.UI.minimapButton:Hide()
+        end
+        return
+    end
+
+    if ZugZug.UI.minimapButton then
+        ZugZug.UI.minimapButton:Show()
+        return
+    end
 
     local button = CreateFrame("Button", "ZugZugMinimapButton", Minimap)
     button:SetWidth(24)
@@ -2851,6 +2883,7 @@ function ZugZug_UI_CreateMinimapButton()
 end
 
 function ZugZug_UI_RegisterDefaultTabs()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
     if ZugZug.UI.defaultTabsRegistered then return end
 
     ZugZug_UI_RegisterTab("dashboard", "Dashboard", ZugZug_UI_BuildDashboard)
