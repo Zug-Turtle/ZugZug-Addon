@@ -944,6 +944,7 @@ local function ZugZug_UI_AddChatMessages(chatFrame, rows, color)
         if row then
             local sender = row.sender or "?"
             local msg = row.msg or ""
+            msg = string.gsub(msg, "|", "||")
             chatFrame:AddMessage(ZugZug_ClassColorize(sender) .. ": |" .. color .. msg .. "|r")
         end
 
@@ -980,6 +981,55 @@ local function ZugZug_UI_CreateChatPanel(parent, titleText, rows, color, width, 
     end)
 
     ZugZug_UI_AddChatMessages(chatFrame, rows, color)
+
+    return panel
+end
+
+local function ZugZug_UI_CreateCapyChatPanel(parent, width, height)
+    local panel = ZugZug_UI_CreateCard(parent, width, height)
+
+    local title = ZugZug_UI_CreateText(panel, nil, "|cff69ccf0#capy-chat|r", "normal")
+    title:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -8)
+
+    local chatFrame = CreateFrame("ScrollingMessageFrame", nil, panel)
+    chatFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -34)
+    chatFrame:SetWidth(width - 20)
+    chatFrame:SetHeight(height - 76)
+    chatFrame:SetFontObject(GameFontHighlightSmall)
+    chatFrame:SetJustifyH("LEFT")
+    chatFrame:SetMaxLines(160)
+    chatFrame:SetFading(false)
+    chatFrame:EnableMouseWheel(true)
+
+    chatFrame:SetScript("OnMouseWheel", function()
+        if arg1 and arg1 > 0 then
+            this:ScrollUp()
+        else
+            this:ScrollDown()
+        end
+    end)
+
+    ZugZug_UI_AddChatMessages(chatFrame, ZugZug.capyChatLog or {}, "cffd6e7ff")
+
+    local inputFrame, input = ZugZug_UI_CreateCleanEditBox(panel, width - 78, 24, "")
+    inputFrame:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 10, 10)
+    input:SetMaxLetters(220)
+
+    local sendButton = ZugZug_UI_CreateButton(panel, nil, "Send", 54, 24)
+    sendButton:SetPoint("LEFT", inputFrame, "RIGHT", 6, 0)
+
+    local function sendMessage()
+        local text = input:GetText() or ""
+        if ZugZug_SendCapyChatMessage and ZugZug_SendCapyChatMessage(text) then
+            input:SetText("")
+            if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
+                ZugZug_UI_ShowTab("dashboard")
+            end
+        end
+    end
+
+    sendButton:SetScript("OnClick", sendMessage)
+    input:SetScript("OnEnterPressed", sendMessage)
 
     return panel
 end
@@ -1044,6 +1094,285 @@ local function ZugZug_UI_CreateMiniLFGRow(parent, listing, x, y, width)
     end
 end
 
+local function ZugZug_UI_CreateDashboardLFGPanel(parent, width, height)
+    local lfgPanel = ZugZug_UI_CreateCard(parent, width, height)
+
+    local lfgTitle = ZugZug_UI_CreateText(lfgPanel, nil, "|cff00ff00Guild LFG|r", "normal")
+    lfgTitle:SetPoint("TOPLEFT", lfgPanel, "TOPLEFT", 10, -8)
+
+    local myId, myListing = ZugZug_UI_FindMyLFGListing()
+
+    if myListing then
+        local label = ZugZug_UI_CreateText(lfgPanel, nil, "|cffaaaaaaYour current group|r", "small")
+        label:SetPoint("TOPLEFT", lfgPanel, "TOPLEFT", 10, -30)
+
+        ZugZug_UI_CreateMiniLFGRow(lfgPanel, myListing, 10, -50, width - 20)
+
+        local openButton = ZugZug_UI_CreateButton(lfgPanel, nil, "Open LFG", 78, 20)
+        openButton:SetPoint("BOTTOMRIGHT", lfgPanel, "BOTTOMRIGHT", -10, 8)
+        openButton:SetScript("OnClick", function()
+            ZugZug_UI_ShowTab("lfg")
+        end)
+    else
+        local canCreate = true
+
+        if ZugZug_LFG_CanCreateListing and not ZugZug_LFG_CanCreateListing() then
+            canCreate = false
+        end
+
+        if canCreate then
+            local createButton = ZugZug_UI_CreateButton(lfgPanel, nil, "New Group", 88, 20)
+            createButton:SetPoint("TOPRIGHT", lfgPanel, "TOPRIGHT", -10, -6)
+            createButton:SetScript("OnClick", function()
+                if ZugZug_LFG_SetCreateOpen then
+                    ZugZug_LFG_SetCreateOpen(true)
+                end
+
+                ZugZug_UI_ShowTab("lfg")
+            end)
+        end
+
+        local scroll = CreateFrame("ScrollFrame", nil, lfgPanel)
+        scroll:SetPoint("TOPLEFT", lfgPanel, "TOPLEFT", 10, -34)
+        scroll:SetWidth(width - 20)
+        scroll:SetHeight(height - 44)
+        scroll:EnableMouseWheel(true)
+
+        local child = CreateFrame("Frame", nil, scroll)
+        child:SetWidth(width - 20)
+
+        local count = 0
+        if ZugZug.LFG and ZugZug.LFG.listings then
+            for id, listing in pairs(ZugZug.LFG.listings) do
+                if listing then
+                    count = count + 1
+                end
+            end
+        end
+
+        local rowHeight = 74
+        local childHeight = count * rowHeight
+
+        if childHeight < height - 43 then
+            childHeight = height - 43
+        end
+
+        child:SetHeight(childHeight)
+        scroll:SetScrollChild(child)
+
+        scroll:SetScript("OnMouseWheel", function()
+            local current = this:GetVerticalScroll()
+            local maxScroll = this:GetVerticalScrollRange()
+
+            if not current then current = 0 end
+            if not maxScroll then maxScroll = 0 end
+
+            if arg1 and arg1 > 0 then
+                current = current - 34
+                if current < 0 then current = 0 end
+            else
+                current = current + 34
+                if current > maxScroll then current = maxScroll end
+            end
+
+            this:SetVerticalScroll(current)
+        end)
+
+        if count == 0 then
+            local empty = ZugZug_UI_CreateText(child, nil, "|cff777777No active LFG groups.|r", "small")
+            empty:SetPoint("TOPLEFT", child, "TOPLEFT", 0, 0)
+        else
+            local listY = 0
+
+            for id, listing in pairs(ZugZug.LFG.listings) do
+                if listing then
+                    ZugZug_UI_CreateMiniLFGRow(child, listing, 0, listY, width - 20)
+                    listY = listY - rowHeight
+                end
+            end
+        end
+    end
+
+    return lfgPanel
+end
+
+local function ZugZug_UI_CreateIdentityPanel(parent, width, height)
+    local panel = ZugZug_UI_CreateCard(parent, width, height)
+
+    local title = ZugZug_UI_CreateText(panel, nil, "|cffffd100Verified Characters|r", "normal")
+    title:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -8)
+
+    local identity = ZugZug.dashboardIdentity or {}
+    local visibleRealms = {}
+    local visibleTotal = 0
+    local realmOrder = { "capycraft", "turtle" }
+    local realmNames = {
+        capycraft = "",
+        turtle = "Turtle WoW",
+    }
+
+    local function addRealmCharacters(realmKey, realmName, chars)
+        local visibleChars = {}
+        local i = 1
+
+        while chars and i <= table.getn(chars) do
+            local character = chars[i]
+
+            if character and character.name and string.lower(character.name) ~= string.lower(ZugZug.BOTNAME or "") then
+                if character.isCurrent then
+                    table.insert(visibleChars, 1, character)
+                else
+                    table.insert(visibleChars, character)
+                end
+            end
+
+            i = i + 1
+        end
+
+        if table.getn(visibleChars) > 0 then
+            table.insert(visibleRealms, {
+                realmKey = realmKey,
+                realmName = realmNames[realmKey] or realmName or realmKey,
+                characters = visibleChars,
+            })
+            visibleTotal = visibleTotal + table.getn(visibleChars)
+        end
+    end
+
+    if identity.realms and table.getn(identity.realms) > 0 then
+        local realmsByKey = {}
+        local i = 1
+
+        while i <= table.getn(identity.realms) do
+            local realm = identity.realms[i]
+            if realm and realm.realmKey then
+                realmsByKey[string.lower(realm.realmKey)] = realm
+            end
+            i = i + 1
+        end
+
+        i = 1
+        while i <= table.getn(realmOrder) do
+            local key = realmOrder[i]
+            local realm = realmsByKey[key]
+            if realm then
+                addRealmCharacters(key, realmNames[key] or realm.realmName, realm.characters or {})
+            end
+            i = i + 1
+        end
+    else
+        addRealmCharacters("", "", identity.characters or {})
+    end
+
+    if not identity.updatedAt then
+        local pending = ZugZug_UI_CreateText(panel, nil, "|cffaaaaaaChecking Discord verification...|r", "small")
+        pending:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -34)
+        pending:SetWidth(width - 20)
+        return panel
+    end
+
+    if not identity.verified or visibleTotal == 0 then
+        local prompt = ZugZug_UI_CreateText(panel, nil, "|cffaaaaaaPlease verify on Discord for more features.|r", "small")
+        prompt:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -34)
+        prompt:SetWidth(width - 20)
+        prompt:SetJustifyH("LEFT")
+        return panel
+    end
+
+    local status = ZugZug_UI_CreateText(panel, nil, "|cff00ff00Verified|r", "small")
+    status:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -10, -10)
+
+    local scroll = CreateFrame("ScrollFrame", nil, panel)
+    scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -34)
+    scroll:SetWidth(width - 20)
+    scroll:SetHeight(height - 44)
+    scroll:EnableMouseWheel(true)
+
+    local child = CreateFrame("Frame", nil, scroll)
+    child:SetWidth(width - 20)
+
+    local rowHeight = 20
+    local headerHeight = 18
+    local childHeight = 0
+    local realmIndex = 1
+
+    while realmIndex <= table.getn(visibleRealms) do
+        local realm = visibleRealms[realmIndex]
+        if realm.realmName and realm.realmName ~= "" then
+            childHeight = childHeight + headerHeight
+        end
+        childHeight = childHeight + (table.getn(realm.characters or {}) * rowHeight)
+        realmIndex = realmIndex + 1
+    end
+
+    if childHeight < height - 43 then childHeight = height - 43 end
+    child:SetHeight(childHeight)
+    scroll:SetScrollChild(child)
+
+    scroll:SetScript("OnMouseWheel", function()
+        local current = this:GetVerticalScroll()
+        local maxScroll = this:GetVerticalScrollRange()
+
+        if not current then current = 0 end
+        if not maxScroll then maxScroll = 0 end
+
+        if arg1 and arg1 > 0 then
+            current = current - 28
+            if current < 0 then current = 0 end
+        else
+            current = current + 28
+            if current > maxScroll then current = maxScroll end
+        end
+
+        this:SetVerticalScroll(current)
+    end)
+
+    local y = 0
+    realmIndex = 1
+
+    while realmIndex <= table.getn(visibleRealms) do
+        local realm = visibleRealms[realmIndex]
+        local headerText = realm.realmName or ""
+
+        if headerText ~= "" then
+            local header = ZugZug_UI_CreateText(child, nil, "|cffffd100" .. headerText .. "|r", "small")
+            header:SetPoint("TOPLEFT", child, "TOPLEFT", 0, y)
+            header:SetWidth(width - 20)
+            y = y - headerHeight
+        end
+
+        local i = 1
+        while realm.characters and i <= table.getn(realm.characters) do
+            local character = realm.characters[i]
+
+            if character and character.name then
+                local level = tonumber(character.level or 0) or 0
+                local levelText = ""
+                if level > 0 then
+                    levelText = "|cffaaaaaa[" .. tostring(level) .. "]|r "
+                end
+
+                local nameText = levelText .. ZugZug_ClassColorize(character.name)
+                if character.isCurrent then
+                    nameText = nameText .. " |cffaaaaaa(current)|r"
+                end
+
+                local name = ZugZug_UI_CreateText(child, nil, nameText, "normal")
+                name:SetPoint("TOPLEFT", child, "TOPLEFT", 6, y)
+                name:SetWidth(width - 26)
+
+                y = y - rowHeight
+            end
+
+            i = i + 1
+        end
+
+        realmIndex = realmIndex + 1
+    end
+
+    return panel
+end
+
 -- Default Tabs
 
 local function ZugZug_UI_BuildDashboard(parent)
@@ -1062,16 +1391,9 @@ local function ZugZug_UI_BuildDashboard(parent)
     local leftWidth = 315
     local rightWidth = 315
     local gap = 4
-    local fullHeight = 338
+    local fullHeight = 336
 
-    local left = ZugZug_UI_CreateChatPanel(
-        parent,
-        "|cff00ff00Guild Chat|r",
-        ZugZug.guildChatLog,
-        "cff00ff00",
-        leftWidth,
-        fullHeight
-    )
+    local left = ZugZug_UI_CreateCapyChatPanel(parent, leftWidth, fullHeight)
     left:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, panelTop)
 
     local state = ZugZug.dashboardState or {}
@@ -1181,10 +1503,6 @@ local function ZugZug_UI_BuildDashboard(parent)
     if hasDarkmoon then
         local dmfCurrent = state.dmfLocation or ""
 
-        if state.dmfZone and state.dmfZone ~= "" then
-            dmfCurrent = dmfCurrent .. " - " .. state.dmfZone
-        end
-
         local dmfLabel = ZugZug_UI_CreateText(info, nil, "|cff00ff00Darkmoon Faire|r", "small")
         dmfLabel:SetPoint("TOPLEFT", info, "TOPLEFT", 10, y)
         dmfLabel:SetWidth(labelWidth)
@@ -1199,15 +1517,11 @@ local function ZugZug_UI_BuildDashboard(parent)
     if hasDarkmoonNext then
         local dmfNext = state.dmfNextLocation or ""
 
-        if state.dmfNextZone and state.dmfNextZone ~= "" then
-            dmfNext = dmfNext .. " - " .. state.dmfNextZone
-        end
-
         dmfNextText = ZugZug_UI_CreateText(info, nil, "", "small")
         dmfNextText:SetPoint("TOPLEFT", info, "TOPLEFT", valueX, y)
         dmfNextText:SetWidth(valueWidth)
 
-        local nextLabel = ZugZug_UI_CreateText(info, nil, "|cffaaaaaaNext|r", "small")
+        local nextLabel = ZugZug_UI_CreateText(info, nil, "|cffaaaaaaNext Location|r", "small")
         nextLabel:SetPoint("TOPLEFT", info, "TOPLEFT", 10, y)
         nextLabel:SetWidth(labelWidth)
 
@@ -1238,104 +1552,8 @@ local function ZugZug_UI_BuildDashboard(parent)
         end)
     end
 
-    local lfgPanel = ZugZug_UI_CreateCard(parent, rightWidth, bottomRightHeight)
-    lfgPanel:SetPoint("TOPRIGHT", info, "BOTTOMRIGHT", 0, -gap)
-
-    local lfgTitle = ZugZug_UI_CreateText(lfgPanel, nil, "|cff00ff00Guild LFG|r", "normal")
-    lfgTitle:SetPoint("TOPLEFT", lfgPanel, "TOPLEFT", 10, -8)
-
-    local myId, myListing = ZugZug_UI_FindMyLFGListing()
-
-    if myListing then
-        local label = ZugZug_UI_CreateText(lfgPanel, nil, "|cffaaaaaaYour current group|r", "small")
-        label:SetPoint("TOPLEFT", lfgPanel, "TOPLEFT", 10, -30)
-
-        ZugZug_UI_CreateMiniLFGRow(lfgPanel, myListing, 10, -50, rightWidth - 20)
-
-        local openButton = ZugZug_UI_CreateButton(lfgPanel, nil, "Open LFG", 78, 20)
-        openButton:SetPoint("BOTTOMRIGHT", lfgPanel, "BOTTOMRIGHT", -10, 8)
-        openButton:SetScript("OnClick", function()
-            ZugZug_UI_ShowTab("lfg")
-        end)
-    else
-        local canCreate = true
-
-        if ZugZug_LFG_CanCreateListing and not ZugZug_LFG_CanCreateListing() then
-            canCreate = false
-        end
-
-        if canCreate then
-            local createButton = ZugZug_UI_CreateButton(lfgPanel, nil, "New Group", 88, 20)
-            createButton:SetPoint("TOPRIGHT", lfgPanel, "TOPRIGHT", -10, -6)
-            createButton:SetScript("OnClick", function()
-                if ZugZug_LFG_SetCreateOpen then
-                    ZugZug_LFG_SetCreateOpen(true)
-                end
-
-                ZugZug_UI_ShowTab("lfg")
-            end)
-        end
-
-        local scroll = CreateFrame("ScrollFrame", nil, lfgPanel)
-        scroll:SetPoint("TOPLEFT", lfgPanel, "TOPLEFT", 10, -34)
-        scroll:SetWidth(rightWidth - 20)
-        scroll:SetHeight(bottomRightHeight - 44)
-        scroll:EnableMouseWheel(true)
-
-        local child = CreateFrame("Frame", nil, scroll)
-        child:SetWidth(rightWidth - 20)
-
-        local count = 0
-        if ZugZug.LFG and ZugZug.LFG.listings then
-            for id, listing in pairs(ZugZug.LFG.listings) do
-                if listing then
-                    count = count + 1
-                end
-            end
-        end
-
-        local rowHeight = 74
-        local childHeight = count * rowHeight
-
-        if childHeight < bottomRightHeight - 43 then
-            childHeight = bottomRightHeight - 43
-        end
-
-        child:SetHeight(childHeight)
-        scroll:SetScrollChild(child)
-
-        scroll:SetScript("OnMouseWheel", function()
-            local current = this:GetVerticalScroll()
-            local maxScroll = this:GetVerticalScrollRange()
-
-            if not current then current = 0 end
-            if not maxScroll then maxScroll = 0 end
-
-            if arg1 and arg1 > 0 then
-                current = current - 34
-                if current < 0 then current = 0 end
-            else
-                current = current + 34
-                if current > maxScroll then current = maxScroll end
-            end
-
-            this:SetVerticalScroll(current)
-        end)
-
-        if count == 0 then
-            local empty = ZugZug_UI_CreateText(child, nil, "|cff777777No active LFG groups.|r", "small")
-            empty:SetPoint("TOPLEFT", child, "TOPLEFT", 0, 0)
-        else
-            local listY = 0
-
-            for id, listing in pairs(ZugZug.LFG.listings) do
-                if listing then
-                    ZugZug_UI_CreateMiniLFGRow(child, listing, 0, listY, rightWidth - 20)
-                    listY = listY - rowHeight
-                end
-            end
-        end
-    end
+    local identityPanel = ZugZug_UI_CreateIdentityPanel(parent, rightWidth, bottomRightHeight)
+    identityPanel:SetPoint("TOPRIGHT", info, "BOTTOMRIGHT", 0, -gap)
 end
 
 local function ZugZug_UI_BuildLFG(parent)
@@ -2057,6 +2275,72 @@ local function ZugZug_UI_BuildSettings(parent)
 
     local loginText = ZugZug_UI_CreateText(parent, nil, "Show window on login", "normal")
     loginText:SetPoint("LEFT", loginCheck, "RIGHT", 0, 1)
+
+        local locationTitle = ZugZug_UI_CreateText(parent, nil, "Guild Location", "normal")
+    locationTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -136)
+
+    local showLocations = false
+    if ZugZug_GetShowGuildLocations then
+        showLocations = ZugZug_GetShowGuildLocations()
+    end
+
+    local showCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    showCheck:SetWidth(24)
+    showCheck:SetHeight(24)
+    showCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", -4, -154)
+
+    if showLocations then
+        showCheck:SetChecked(1)
+    else
+        showCheck:SetChecked(nil)
+    end
+
+    showCheck:SetScript("OnClick", function()
+        if this:GetChecked() then
+            ZugZug_SetShowGuildLocations(true)
+        else
+            ZugZug_SetShowGuildLocations(false)
+            ZugZug_Map_UpdateGuildPins()
+        end
+
+        ZugZug_UI_ShowTab("settings")
+    end)
+
+    local showText = ZugZug_UI_CreateText(parent, nil, "Show guildies' location on map", "normal")
+    showText:SetPoint("LEFT", showCheck, "RIGHT", 0, 1)
+
+    local shareLocation = false
+    if ZugZug_GetShareMyLocation then
+        shareLocation = ZugZug_GetShareMyLocation()
+    end
+
+    local shareCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    shareCheck:SetWidth(24)
+    shareCheck:SetHeight(24)
+    shareCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", -4, -180)
+
+    if shareLocation then
+        shareCheck:SetChecked(1)
+    else
+        shareCheck:SetChecked(nil)
+    end
+
+    shareCheck:SetScript("OnClick", function()
+        if this:GetChecked() then
+            ZugZug_SetShareMyLocation(true)
+
+            if ZugZug_BroadcastMyLocation then
+                ZugZug_BroadcastMyLocation()
+            end
+        else
+            ZugZug_SetShareMyLocation(false)
+        end
+
+        ZugZug_UI_ShowTab("settings")
+    end)
+
+    local shareText = ZugZug_UI_CreateText(parent, nil, "Share my location with guildies", "normal")
+    shareText:SetPoint("LEFT", shareCheck, "RIGHT", 0, 1)
 
     local versionText = ZugZug_UI_CreateText(parent, nil, "|cff777777ZugZug v" .. ZugZug.VERSION .. "|r", "small")
     versionText:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 0, 0)

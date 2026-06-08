@@ -62,6 +62,49 @@ local function ZugZug_OnAddonMessage()
         return
     end
 
+    if cmd == "IDENTITY" then
+        if sender == ZugZug.BOTNAME and ZugZug_SetDashboardIdentityFromPayload then
+            if ZugZug_SetDashboardIdentityFromPayload(data) then
+                if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
+                    ZugZug_UI_ShowTab("dashboard")
+                end
+            end
+        end
+        return
+    end
+
+    if cmd == "CAPY_CHAT" then
+        if sender == ZugZug.BOTNAME and ZugZug_AddCapyChatFromPayload then
+            if ZugZug_AddCapyChatFromPayload(data) then
+                if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
+                    ZugZug_UI_ShowTab("dashboard")
+                end
+            end
+        end
+        return
+    end
+
+    if cmd == "CAPY_CHAT_SEND" then
+        if ZugZug_AddCapyChatFromSendPayload then
+            if ZugZug_AddCapyChatFromSendPayload(sender, data) then
+                if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
+                    ZugZug_UI_ShowTab("dashboard")
+                end
+            end
+        end
+        return
+    end
+
+    if cmd == "LOC" then
+        ZugZug_SetGuildLocationFromPayload(sender, data)
+
+        if WorldMapFrame and WorldMapFrame:IsShown() then
+            ZugZug_Map_UpdateGuildPins()
+        end
+
+        return
+    end
+
     if string.find(cmd, "OFC_", 1, true) == 1 then
         if cmd == "OFC_BANLIST" then
             ZugZug_SetBanlistFromPayload(data)
@@ -93,6 +136,20 @@ local function ZugZug_OnAddonMessage()
 end
 
 -- Main Event Frame
+local function ZugZug_RefreshDashboardMOTD()
+    local changed = false
+
+    if ZugZug_UpdateDashboardMOTDFromGuild then
+        changed = ZugZug_UpdateDashboardMOTDFromGuild()
+    end
+
+    if changed and ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
+        ZugZug_UI_ShowTab("dashboard")
+    end
+
+    return changed
+end
+
 local zug = CreateFrame("Frame")
 zug:RegisterEvent("PLAYER_LOGIN")
 zug:RegisterEvent("PLAYER_LOGOUT")
@@ -108,6 +165,9 @@ zug:RegisterEvent("ZONE_CHANGED_INDOORS")
 zug:RegisterEvent("PARTY_INVITE_REQUEST")
 zug:RegisterEvent("PARTY_MEMBERS_CHANGED")
 zug:RegisterEvent("RAID_ROSTER_UPDATE")
+pcall(function()
+    zug:RegisterEvent("GUILD_MOTD")
+end)
 
 zug:SetScript("OnEvent", function()
     if event == "VARIABLES_LOADED" then
@@ -115,6 +175,7 @@ zug:SetScript("OnEvent", function()
         ZugZug_UI_CreateMinimapButton()
         -- Handle ZugZugDB Lua SavedVariables later when we need it :p
     elseif event == "GUILD_ROSTER_UPDATE" then 
+        ZugZug_RefreshDashboardMOTD()
         ZugZug_UpdateOnlineMembers()
         if ZugZug_LFG_PruneOffline then
             ZugZug_LFG_PruneOffline()
@@ -133,12 +194,18 @@ zug:SetScript("OnEvent", function()
         ZugZug_Wait(1, function() 
             ZugZug_HandleLogin()
             ZugZug_UI_RegisterDefaultTabs()
+            ZugZug_RefreshDashboardMOTD()
             ZugZug_LFG_StartTicker()
+            if ZugZug_Location_StartTicker then
+                ZugZug_Location_StartTicker()
+            end
 
             if ZugZug_GetShowWindowOnLogin and ZugZug_GetShowWindowOnLogin() then
                 ZugZug_UI_Show()
             end
         end)
+    elseif event == "GUILD_MOTD" then
+        ZugZug_RefreshDashboardMOTD()
     elseif event == "PLAYER_LOGOUT" then
         if ZugZug.LFG and ZugZug.LFG.myListingId then
             ZugZug_LFG_CloseListing(ZugZug.LFG.myListingId)
@@ -151,9 +218,6 @@ zug:SetScript("OnEvent", function()
         local sender = arg2
         if sender and msg then
             ZugZug_AddGuildChatLog(sender, msg)
-            if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
-                ZugZug_UI_ShowTab("dashboard")
-            end
         end
     elseif event == "CHAT_MSG_OFFICER" then
         local msg = arg1

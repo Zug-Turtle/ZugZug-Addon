@@ -27,6 +27,13 @@ ZugZug.incomingChunks = {}
 ZugZug.onlineMembers = {}
 ZugZug.addonUsers = {}
 
+ZugZug.locationBroadcastInterval = 5
+ZugZug.locationPinUpdateInterval = 0.25
+ZugZug.locationTimeout = 90
+ZugZug.locationTicker = nil
+ZugZug.locationPins = {}
+
+
 function ZugZug_Log(msg) print("|cff00ff00[ZugZug]|r " .. msg) end
 
 function ZugZug_InitDB()
@@ -38,6 +45,8 @@ function ZugZug_InitDB()
     if not ZugZugDB.banlist then ZugZugDB.banlist = {} end
     if not ZugZugDB.classByName then ZugZugDB.classByName = {} end
     if not ZugZugDB.dashboardState then ZugZugDB.dashboardState = {} end
+    if not ZugZugDB.dashboardIdentity then ZugZugDB.dashboardIdentity = {} end
+    if not ZugZugDB.capyChatLog then ZugZugDB.capyChatLog = {} end
     if not ZugZug.guildChatLog then ZugZug.guildChatLog = {} end 
 
     if ZugZugDB.rosterSameZoneOnly == nil then
@@ -46,6 +55,14 @@ function ZugZug_InitDB()
 
     if ZugZugDB.showWindowOnLogin == nil then
         ZugZugDB.showWindowOnLogin = false
+    end
+
+    if ZugZugDB.showGuildLocations == nil then
+        ZugZugDB.showGuildLocations = false
+    end
+
+    if ZugZugDB.shareMyLocation == nil then
+        ZugZugDB.shareMyLocation = false
     end
 
     if not ZugZugDB.window then
@@ -69,6 +86,14 @@ function ZugZug_InitDB()
     ZugZug.officerMacro = ZugZugDB.officerMacro
     ZugZug.classByName = ZugZugDB.classByName
     ZugZug.dashboardState = ZugZugDB.dashboardState;
+    ZugZug.dashboardIdentity = ZugZugDB.dashboardIdentity
+    ZugZug.capyChatLog = ZugZugDB.capyChatLog
+    ZugZug.showGuildLocations = ZugZugDB.showGuildLocations
+    ZugZug.shareMyLocation = ZugZugDB.shareMyLocation
+
+    if not ZugZug.guildLocations then
+        ZugZug.guildLocations = {}
+    end
 
     local playerName = UnitName("player")
     if playerName and ZugZugDB.lfgRoles[playerName] then
@@ -132,8 +157,64 @@ function ZugZug_GetWindowPosition()
     }
 end
 
+function ZugZug_SetShowGuildLocations(enabled)
+    if not ZugZugDB then ZugZugDB = {} end
+    if enabled then
+        ZugZugDB.showGuildLocations = true
+        ZugZug.showGuildLocations = true
+    else
+        ZugZugDB.showGuildLocations = false
+        ZugZug.showGuildLocations = false
+    end
+end
+
+function ZugZug_GetShowGuildLocations()
+    if ZugZug.showGuildLocations then return true end
+    return false
+end
+
+function ZugZug_SetShareMyLocation(enabled)
+    if not ZugZugDB then ZugZugDB = {} end
+    if enabled then
+        ZugZugDB.shareMyLocation = true
+        ZugZug.shareMyLocation = true
+    else
+        ZugZugDB.shareMyLocation = false
+        ZugZug.shareMyLocation = false
+    end
+end
+
+function ZugZug_GetShareMyLocation()
+    if ZugZug.shareMyLocation then return true end
+    return false
+end
+
+function ZugZug_NormalizeClass(class)
+    if not class or class == "" then return "" end
+
+    class = tostring(class)
+
+    local lower = string.lower(class)
+
+    if lower == "warrior" then return "Warrior" end
+    if lower == "paladin" then return "Paladin" end
+    if lower == "hunter" then return "Hunter" end
+    if lower == "rogue" then return "Rogue" end
+    if lower == "priest" then return "Priest" end
+    if lower == "shaman" then return "Shaman" end
+    if lower == "mage" then return "Mage" end
+    if lower == "warlock" then return "Warlock" end
+    if lower == "druid" then return "Druid" end
+
+    return class
+end
+
 function ZugZug_SaveClassForName(name, class)
     if not name or name == "" then return end
+    if not class or class == "" then return end
+
+    class = ZugZug_NormalizeClass(class)
+
     if not class or class == "" then return end
 
     if not ZugZugDB then ZugZugDB = {} end
@@ -176,6 +257,32 @@ function ZugZug_AddGuildChatLog(sender, msg)
     end
 end
 
+function ZugZug_AddCapyChatLog(sender, msg, className, source)
+    if not sender or sender == "" then return end
+    if not msg or msg == "" then return end
+
+    if className and className ~= "" then
+        ZugZug_SaveClassForName(sender, className)
+    end
+
+    if not ZugZugDB then ZugZugDB = {} end
+    if not ZugZugDB.capyChatLog then ZugZugDB.capyChatLog = {} end
+
+    table.insert(ZugZugDB.capyChatLog, {
+        sender = sender,
+        msg = msg,
+        className = className or "",
+        source = source or "game",
+        at = time(),
+    })
+
+    while table.getn(ZugZugDB.capyChatLog) > 120 do
+        table.remove(ZugZugDB.capyChatLog, 1)
+    end
+
+    ZugZug.capyChatLog = ZugZugDB.capyChatLog
+end
+
 function ZugZug_SetDashboardStateFromPayload(payload)
     if not payload or payload == "" then return end
 
@@ -214,6 +321,254 @@ function ZugZug_SetDashboardStateFromPayload(payload)
     ZugZugDB.dashboardState.updatedAt = time()
 
     ZugZug.dashboardState = ZugZugDB.dashboardState
+end
+
+function ZugZug_UpdateDashboardMOTDFromGuild()
+    if not GetGuildRosterMOTD then return false end
+
+    local motd = GetGuildRosterMOTD() or ""
+
+    if not ZugZugDB then ZugZugDB = {} end
+    if not ZugZugDB.dashboardState then ZugZugDB.dashboardState = {} end
+
+    if ZugZugDB.dashboardState.guildMotd == motd then
+        ZugZug.dashboardState = ZugZugDB.dashboardState
+        return false
+    end
+
+    ZugZugDB.dashboardState.guildMotd = motd
+    ZugZugDB.dashboardState.motdUpdatedAt = time()
+    ZugZug.dashboardState = ZugZugDB.dashboardState
+    return true
+end
+
+local function ZugZug_DecodeHexText(hex)
+    if not hex or hex == "" then return "" end
+
+    local out = ""
+    local i = 1
+
+    while i < string.len(hex) do
+        local pair = string.sub(hex, i, i + 1)
+        local n = tonumber(pair, 16)
+
+        if not n then
+            return ""
+        end
+
+        out = out .. string.char(n)
+        i = i + 2
+    end
+
+    return out
+end
+
+local function ZugZug_EncodeHexText(text)
+    if not text or text == "" then return "" end
+
+    local out = ""
+    local i = 1
+
+    while i <= string.len(text) do
+        out = out .. string.format("%02x", string.byte(text, i))
+        i = i + 1
+    end
+
+    return out
+end
+
+local function ZugZug_SplitDelimited(value, delimiter)
+    local fields = {}
+    local fieldStart = 1
+    local fieldIndex = 1
+
+    while true do
+        local fieldPos = string.find(value, delimiter, fieldStart, true)
+
+        if fieldPos then
+            fields[fieldIndex] = string.sub(value, fieldStart, fieldPos - 1)
+            fieldStart = fieldPos + string.len(delimiter)
+        else
+            fields[fieldIndex] = string.sub(value, fieldStart)
+            break
+        end
+
+        fieldIndex = fieldIndex + 1
+    end
+
+    return fields
+end
+
+local function ZugZug_IsSupportedIdentityRealm(key)
+    key = string.lower(key or "")
+    return key == "capycraft" or key == "turtle"
+end
+
+local function ZugZug_GetIdentityRealm(identity, key, name)
+    if not identity.realmsByKey then
+        identity.realmsByKey = {}
+    end
+
+    key = string.lower(key or "")
+
+    if identity.realmsByKey[key] then
+        return identity.realmsByKey[key]
+    end
+
+    local realm = {
+        realmKey = key,
+        realmName = name or key,
+        characters = {},
+    }
+
+    identity.realmsByKey[key] = realm
+    table.insert(identity.realms, realm)
+    return realm
+end
+
+function ZugZug_SetDashboardIdentityFromPayload(payload)
+    if not payload or payload == "" then return false end
+
+    local sep = string.find(payload, ":", 1, true)
+    if not sep then return false end
+
+    local target = ZugZug_SafeDecodeText(string.sub(payload, 1, sep - 1))
+    local body = ZugZug_DecodeHexText(string.sub(payload, sep + 1))
+    local player = UnitName("player")
+
+    if not target or target == "" then return false end
+    if not player or string.lower(target) ~= string.lower(player) then return false end
+    if not body or body == "" then return false end
+
+    local bodySep = string.find(body, ":", 1, true)
+    if not bodySep then return false end
+
+    local verified = string.sub(body, 1, bodySep - 1)
+    local rows = string.sub(body, bodySep + 1)
+
+    if not ZugZugDB then ZugZugDB = {} end
+    if not ZugZugDB.dashboardIdentity then ZugZugDB.dashboardIdentity = {} end
+
+    local identity = {
+        target = target,
+        verified = (verified == "1"),
+        updatedAt = time(),
+        characters = {},
+        realms = {},
+        realmsByKey = {},
+    }
+
+    local rowStart = 1
+
+    while rows and rows ~= "" do
+        local rowPos = string.find(rows, "%^", rowStart)
+        local row = nil
+
+        if rowPos then
+            row = string.sub(rows, rowStart, rowPos - 1)
+            rowStart = rowPos + 1
+        else
+            row = string.sub(rows, rowStart)
+            rows = ""
+        end
+
+        if row and row ~= "" then
+            local fields = ZugZug_SplitDelimited(row, "|")
+            local realmKey = nil
+            local realmName = nil
+            local name = nil
+            local level = 0
+            local className = nil
+            local isCurrent = false
+
+            if fields[6] ~= nil and ZugZug_IsSupportedIdentityRealm(fields[1] or "") then
+                realmKey = string.lower(fields[1] or "")
+                realmName = ZugZug_SafeDecodeText(fields[2] or "")
+                name = ZugZug_SafeDecodeText(fields[3] or "")
+                level = tonumber(fields[4] or "0") or 0
+                className = ZugZug_NormalizeClass(ZugZug_SafeDecodeText(fields[5] or ""))
+                isCurrent = (fields[6] == "1")
+            else
+                name = ZugZug_SafeDecodeText(fields[1] or "")
+                level = tonumber(fields[2] or "0") or 0
+                className = ZugZug_NormalizeClass(ZugZug_SafeDecodeText(fields[3] or ""))
+                isCurrent = (fields[4] == "1")
+
+                if fields[6] ~= nil then
+                    isCurrent = (fields[6] == "1")
+                end
+            end
+
+            if name and name ~= "" and string.lower(name) ~= string.lower(ZugZug.BOTNAME or "") then
+                if className and className ~= "" then
+                    ZugZug_SaveClassForName(name, className)
+                end
+
+                local character = {
+                    name = name,
+                    level = level,
+                    className = className,
+                    realmKey = realmKey,
+                    realmName = realmName,
+                    isCurrent = isCurrent,
+                }
+
+                table.insert(identity.characters, character)
+
+                if realmKey then
+                    local realm = ZugZug_GetIdentityRealm(identity, realmKey, realmName)
+                    table.insert(realm.characters, character)
+                end
+            end
+        end
+
+        if rows == "" then break end
+    end
+
+    identity.realmsByKey = nil
+    ZugZugDB.dashboardIdentity = identity
+    ZugZug.dashboardIdentity = ZugZugDB.dashboardIdentity
+    return true
+end
+
+function ZugZug_AddCapyChatFromPayload(payload)
+    if not payload or payload == "" then return false end
+
+    local body = ZugZug_DecodeHexText(payload)
+    if not body or body == "" then return false end
+
+    local fields = ZugZug_SplitDelimited(body, "|")
+    local sender = ZugZug_SafeDecodeText(fields[1] or "")
+    local className = ZugZug_NormalizeClass(ZugZug_SafeDecodeText(fields[2] or ""))
+    local msg = ZugZug_SafeDecodeText(fields[3] or "")
+    local source = ZugZug_SafeDecodeText(fields[4] or "discord")
+
+    if not sender or sender == "" then return false end
+    if not msg or msg == "" then return false end
+
+    ZugZug_AddCapyChatLog(sender, msg, className, source)
+    return true
+end
+
+function ZugZug_AddCapyChatFromSendPayload(sender, payload)
+    if not sender or sender == "" then return false end
+    if not payload or payload == "" then return false end
+
+    local msg = ZugZug_DecodeHexText(payload)
+    if not msg or msg == "" then return false end
+
+    ZugZug_AddCapyChatLog(sender, msg, ZugZug_GetClassForName(sender) or "", "game")
+    return true
+end
+
+function ZugZug_SendCapyChatMessage(msg)
+    msg = ZugZug_NormalizeString(msg)
+    if not msg then return false end
+
+    local sender = UnitName("player") or "You"
+    ZugZug_AddCapyChatLog(sender, msg, ZugZug_GetClassForName(sender) or "", "game")
+    ZugZug_BroadcastAddon("CAPY_CHAT_SEND~" .. ZugZug_EncodeHexText(msg))
+    return true
 end
 
 function ZugZug_FormatMoney(gold, silver, copper)
@@ -816,6 +1171,352 @@ function ZugZug_HandleLogin()
     else
         ZugZug_Log("Unfortunately you are not a member of |cff00ff00<" .. ZugZug.GUILD_NAME .. ">|r. Sorry you're lame.")
     end
+end
+
+local function ZugZug_HexPairToNumber(pair)
+    local n = tonumber(pair or "ff", 16)
+    if not n then n = 255 end
+    return n / 255
+end
+
+function ZugZug_GetClassRGB(class)
+    class = ZugZug_NormalizeClass(class)
+    local hex = nil
+    if class and class ~= "" and ZugZug.CLASS_COLORS then
+        hex = ZugZug.CLASS_COLORS[class]
+    end
+    if not hex or string.len(hex) < 8 then
+        return 1, 0.82, 0
+    end
+
+    local r = ZugZug_HexPairToNumber(string.sub(hex, 3, 4))
+    local g = ZugZug_HexPairToNumber(string.sub(hex, 5, 6))
+    local b = ZugZug_HexPairToNumber(string.sub(hex, 7, 8))
+    return r, g, b
+end
+
+local function ZugZug_GetCurrentMapInfoSafe()
+    if GetMapInfo then
+        return GetMapInfo() or ""
+    end
+
+    return ""
+end
+
+local function ZugZug_GetMyMapPositionSafe()
+    local oldContinent = nil
+    local oldZone = nil
+
+    if GetCurrentMapContinent then
+        oldContinent = GetCurrentMapContinent()
+    end
+
+    if GetCurrentMapZone then
+        oldZone = GetCurrentMapZone()
+    end
+
+    if SetMapToCurrentZone then
+        SetMapToCurrentZone()
+    end
+
+    local mapFile = ZugZug_GetCurrentMapInfoSafe()
+    local zone = ""
+
+    if GetRealZoneText then
+        zone = GetRealZoneText() or ""
+    elseif GetZoneText then
+        zone = GetZoneText() or ""
+    end
+
+    local x = 0
+    local y = 0
+
+    if GetPlayerMapPosition then
+        x, y = GetPlayerMapPosition("player")
+    end
+
+    if oldContinent and oldZone and oldContinent > 0 then
+        if SetMapZoom then
+            SetMapZoom(oldContinent, oldZone)
+        end
+    end
+
+    if not x then x = 0 end
+    if not y then y = 0 end
+
+    return mapFile, zone, x, y
+end
+
+function ZugZug_BroadcastMyLocation()
+    if not ZugZug_GetShareMyLocation or not ZugZug_GetShareMyLocation() then return end
+    if not IsInGuild or not IsInGuild() then return end
+
+    local mapFile, zone, x, y = ZugZug_GetMyMapPositionSafe()
+
+    if not mapFile or mapFile == "" then return end
+    if not zone or zone == "" then return end
+    if not x or not y then return end
+    if x <= 0 and y <= 0 then return end
+
+    local className, englishClass = UnitClass("player")
+    local class = ZugZug_NormalizeClass(className or englishClass or "")
+
+    local xi = math.floor((x * 10000) + 0.5)
+    local yi = math.floor((y * 10000) + 0.5)
+
+    ZugZug_BroadcastAddon("LOC~"
+        .. ZugZug_SafeEncodeText(mapFile) .. ":"
+        .. ZugZug_SafeEncodeText(zone) .. ":"
+        .. tostring(xi) .. ":"
+        .. tostring(yi) .. ":"
+        .. ZugZug_SafeEncodeText(class) .. ":"
+        .. tostring(time())
+    )
+end
+
+function ZugZug_SetGuildLocationFromPayload(sender, payload)
+    if not sender or sender == "" then return end
+    if sender == UnitName("player") then return end
+    if not payload or payload == "" then return end
+
+    if not ZugZug_GetShowGuildLocations or not ZugZug_GetShowGuildLocations() then
+        return
+    end
+
+    local parts = {}
+    local startPos = 1
+    local index = 1
+
+    while true do
+        local pos = string.find(payload, ":", startPos, true)
+
+        if pos then
+            parts[index] = string.sub(payload, startPos, pos - 1)
+            startPos = pos + 1
+        else
+            parts[index] = string.sub(payload, startPos)
+            break
+        end
+
+        index = index + 1
+    end
+
+    local mapFile = ZugZug_SafeDecodeText(parts[1] or "")
+    local zone = ZugZug_SafeDecodeText(parts[2] or "")
+    local xi = tonumber(parts[3] or "0") or 0
+    local yi = tonumber(parts[4] or "0") or 0
+    local class = ZugZug_NormalizeClass(ZugZug_SafeDecodeText(parts[5] or ""))
+    local sentAt = tonumber(parts[6] or "0") or time()
+
+    if mapFile == "" then return end
+    if xi <= 0 and yi <= 0 then return end
+
+    if class and class ~= "" then
+        ZugZug_SaveClassForName(sender, class)
+    else
+        class = ZugZug_GetClassForName(sender) or ""
+    end
+
+    if not ZugZug.guildLocations then
+        ZugZug.guildLocations = {}
+    end
+
+    ZugZug.guildLocations[sender] = {
+        name = sender,
+        mapFile = mapFile,
+        zone = zone,
+        x = xi / 10000,
+        y = yi / 10000,
+        class = class,
+        updatedAt = sentAt,
+    }
+end
+
+function ZugZug_PruneGuildLocations()
+    if not ZugZug.guildLocations then return end
+
+    local now = time()
+
+    for name, loc in pairs(ZugZug.guildLocations) do
+        if not loc or not loc.updatedAt or now - loc.updatedAt > (ZugZug.locationTimeout or 90) then
+            ZugZug.guildLocations[name] = nil
+        end
+    end
+end
+
+local function ZugZug_Map_HideAllPins()
+    if not ZugZug.locationPins then return end
+
+    local i = 1
+    while ZugZug.locationPins[i] do
+        ZugZug.locationPins[i]:Hide()
+        i = i + 1
+    end
+end
+
+local function ZugZug_Map_GetPin(index)
+    if not ZugZug.locationPins then
+        ZugZug.locationPins = {}
+    end
+
+    if ZugZug.locationPins[index] then
+        return ZugZug.locationPins[index]
+    end
+
+    local pin = CreateFrame("Button", nil, WorldMapButton)
+    pin:SetWidth(10)
+    pin:SetHeight(10)
+    pin:EnableMouse(true)
+    pin:SetFrameLevel(WorldMapButton:GetFrameLevel() + 30)
+
+    local border = pin:CreateTexture(nil, "BACKGROUND")
+    border:SetPoint("TOPLEFT", pin, "TOPLEFT", 0, 0)
+    border:SetPoint("BOTTOMRIGHT", pin, "BOTTOMRIGHT", 0, 0)
+    border:SetTexture(0, 0, 0, 0.95)
+    pin.border = border
+
+    local box = pin:CreateTexture(nil, "ARTWORK")
+    box:SetPoint("TOPLEFT", pin, "TOPLEFT", 2, -2)
+    box:SetPoint("BOTTOMRIGHT", pin, "BOTTOMRIGHT", -2, 2)
+    box:SetTexture(1, 0.82, 0, 1)
+    pin.texture = box
+
+    local hover = pin:CreateTexture(nil, "OVERLAY")
+    hover:SetPoint("TOPLEFT", pin, "TOPLEFT", -2, 2)
+    hover:SetPoint("BOTTOMRIGHT", pin, "BOTTOMRIGHT", 2, -2)
+    hover:SetTexture(1, 1, 1, 0)
+    pin.hover = hover
+
+    pin:SetScript("OnEnter", function()
+        if this.hover then
+            this.hover:SetTexture(1, 1, 1, 0.28)
+        end
+
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+
+        local name = this.guildName or "Guild member"
+        local r = this.guildR or 1
+        local g = this.guildG or 0.82
+        local b = this.guildB or 0
+
+        GameTooltip:SetText(name, r, g, b)
+
+        if this.guildZone and this.guildZone ~= "" then
+            GameTooltip:AddLine(this.guildZone, 0.7, 0.7, 0.7)
+        end
+
+        GameTooltip:Show()
+    end)
+
+    pin:SetScript("OnLeave", function()
+        if this.hover then
+            this.hover:SetTexture(1, 1, 1, 0)
+        end
+
+        GameTooltip:Hide()
+    end)
+
+    ZugZug.locationPins[index] = pin
+    return pin
+end
+
+function ZugZug_Map_UpdateGuildPins()
+    if not ZugZug_GetShowGuildLocations or not ZugZug_GetShowGuildLocations() then
+        ZugZug_Map_HideAllPins()
+        return
+    end
+
+    if not WorldMapFrame or not WorldMapFrame:IsShown() then
+        ZugZug_Map_HideAllPins()
+        return
+    end
+
+    if not WorldMapButton then
+        return
+    end
+
+    ZugZug_PruneGuildLocations()
+
+    local currentMap = ZugZug_GetCurrentMapInfoSafe()
+    if not currentMap or currentMap == "" then
+        ZugZug_Map_HideAllPins()
+        return
+    end
+
+    local mapWidth = WorldMapButton:GetWidth()
+    local mapHeight = WorldMapButton:GetHeight()
+
+    if not mapWidth or not mapHeight or mapWidth <= 0 or mapHeight <= 0 then
+        ZugZug_Map_HideAllPins()
+        return
+    end
+
+    local used = 0
+
+    for name, loc in pairs(ZugZug.guildLocations or {}) do
+        if loc and loc.mapFile == currentMap and loc.x and loc.y then
+            used = used + 1
+
+            local pin = ZugZug_Map_GetPin(used)
+            local class = loc.class or ""
+            if class == "" and ZugZug_GetClassForName then
+                class = ZugZug_GetClassForName(name) or ""
+            end
+            class = ZugZug_NormalizeClass(class)
+            local r, g, b = ZugZug_GetClassRGB(class)
+
+            pin.guildName = name
+            pin.guildZone = loc.zone or ""
+            pin.guildR = r
+            pin.guildG = g
+            pin.guildB = b
+
+            pin.texture:SetTexture(r, g, b, 1)
+
+            if pin.border then
+                pin.border:SetTexture(0, 0, 0, 0.95)
+            end
+
+            if pin.hover then
+                pin.hover:SetTexture(1, 1, 1, 0)
+            end
+
+            pin:ClearAllPoints()
+
+            pin:SetPoint("CENTER", WorldMapButton, "TOPLEFT", loc.x * mapWidth, -(loc.y * mapHeight))
+            pin:Show()
+        end
+    end
+
+    local i = used + 1
+    while ZugZug.locationPins and ZugZug.locationPins[i] do
+        ZugZug.locationPins[i]:Hide()
+        i = i + 1
+    end
+end
+
+function ZugZug_Location_StartTicker()
+    if ZugZug.locationTicker then return end
+
+    local frame = CreateFrame("Frame")
+    frame.lastBroadcast = 0
+    frame.lastPinUpdate = 0
+
+    frame:SetScript("OnUpdate", function()
+        local now = GetTime()
+
+        if now - (this.lastBroadcast or 0) >= (ZugZug.locationBroadcastInterval or 5) then
+            this.lastBroadcast = now
+            ZugZug_BroadcastMyLocation()
+        end
+
+        if now - (this.lastPinUpdate or 0) >= (ZugZug.locationPinUpdateInterval or 0.25) then
+            this.lastPinUpdate = now
+            ZugZug_Map_UpdateGuildPins()
+        end
+    end)
+
+    ZugZug.locationTicker = frame
 end
 
 -- Advertising Macro if you wanna use it (mostly for Cows lol): /run ZugZugAdvertiseEnglish()
