@@ -1,7 +1,7 @@
 ZugZug = {}
 ZugZug.NAME = "ZugZug"
 ZugZug.BOTNAME = "Zugbot"
-ZugZug.VERSION = "0.1.1"
+ZugZug.VERSION = "0.1.2"
 ZugZug.GUILD_NAME = "Zug Zug"
 ZugZug.PREFIX = "ZUGZUG"
 ZugZug.DISCORD = "https://discord.gg/cG27gCEK4c"
@@ -24,6 +24,7 @@ ZugZug.MAX_RAW_SIZE = 230
 ZugZug.CHUNK_TIMEOUT = 30
 ZugZug.MAX_INCOMING_CHUNKS = 80
 ZugZug.CAPY_CHAT_MAX_MESSAGES = 100
+ZugZug.AH_MAX_SEARCH_LOG = 100
 ZugZug.chunkSeq = 0
 ZugZug.minimapAngle = 225
 ZugZug.incomingChunks = {}
@@ -35,6 +36,8 @@ ZugZug.locationPinUpdateInterval = 0.25
 ZugZug.locationTimeout = 90
 ZugZug.locationTicker = nil
 ZugZug.locationPins = {}
+ZugZug.ahSearchLog = {}
+ZugZug.ahPriceCacheByItemId = {}
 
 
 function ZugZug_Log(msg) print("|cff00ff00[ZugZug]|r " .. msg) end
@@ -43,35 +46,25 @@ function ZugZug_IsGuildAllowed()
     if not IsInGuild or not IsInGuild() then
         return false
     end
-
     if not GetGuildInfo then
         return false
     end
-
     local guildName = GetGuildInfo("player")
     if guildName == ZugZug.GUILD_NAME then
         return true
     end
-
     return false
 end
 
 function ZugZug_DisableForNonGuild()
     ZugZug.READY = false
-
     if ZugZug.UI then
         if ZugZug.UI.frame then
             ZugZug.UI.frame:Hide()
         end
-
-        if ZugZug.UI.minimapButton then
-            ZugZug.UI.minimapButton:Hide()
-        end
-
         if ZugZug.UI.refreshTickerFrame then
             ZugZug.UI.refreshTickerFrame:SetScript("OnUpdate", nil)
         end
-
         ZugZug.UI.activeTab = nil
         ZugZug.UI.refreshScheduled = nil
         ZugZug.UI.refreshDelay = nil
@@ -90,27 +83,22 @@ end
 
 function ZugZug_ClearTable(t)
     if not t then return end
-
     for key in pairs(t) do
         t[key] = nil
     end
-
     t.n = 0
 end
 
 function ZugZug_GetOnlineMemberCount()
     local count = 0
-
     if not ZugZug.onlineMembers then
         return count
     end
-
     for key, member in pairs(ZugZug.onlineMembers) do
         if key ~= "n" and member and member.name then
             count = count + 1
         end
     end
-
     return count
 end
 
@@ -125,6 +113,8 @@ function ZugZug_InitDB()
     if not ZugZugDB.dashboardState then ZugZugDB.dashboardState = {} end
     if not ZugZugDB.dashboardIdentity then ZugZugDB.dashboardIdentity = {} end
     if not ZugZugDB.capyChatLog then ZugZugDB.capyChatLog = {} end
+    if not ZugZugDB.ahSearchLog then ZugZugDB.ahSearchLog = {} end
+    if not ZugZugDB.ahPriceCacheByItemId then ZugZugDB.ahPriceCacheByItemId = {} end
     if not ZugZug.guildChatLog then ZugZug.guildChatLog = {} end 
 
     if ZugZugDB.rosterSameZoneOnly == nil then
@@ -145,6 +135,14 @@ function ZugZug_InitDB()
 
     if ZugZugDB.enableLFGNotifications == nil then
         ZugZugDB.enableLFGNotifications = true
+    end
+
+    if ZugZugDB.showCapyChatInMainChat == nil then
+        ZugZugDB.showCapyChatInMainChat = false
+    end
+
+    if ZugZugDB.ahOnlyMine == nil then
+        ZugZugDB.ahOnlyMine = false
     end
 
     if not ZugZugDB.window then
@@ -170,9 +168,13 @@ function ZugZug_InitDB()
     ZugZug.dashboardState = ZugZugDB.dashboardState;
     ZugZug.dashboardIdentity = ZugZugDB.dashboardIdentity
     ZugZug.capyChatLog = ZugZugDB.capyChatLog
+    ZugZug.ahSearchLog = ZugZugDB.ahSearchLog
+    ZugZug.ahPriceCacheByItemId = ZugZugDB.ahPriceCacheByItemId
+    ZugZug.ahOnlyMine = ZugZugDB.ahOnlyMine
     ZugZug.showGuildLocations = ZugZugDB.showGuildLocations
     ZugZug.shareMyLocation = ZugZugDB.shareMyLocation
     ZugZug.enableLFGNotifications = ZugZugDB.enableLFGNotifications
+    ZugZug.showCapyChatInMainChat = ZugZugDB.showCapyChatInMainChat
 
     if not ZugZug.guildLocations then
         ZugZug.guildLocations = {}
@@ -185,6 +187,7 @@ function ZugZug_InitDB()
         if role == "TANK" or role == "HEALER" or role == "DPS" then
             if ZugZug.LFG then
                 ZugZug.LFG.currentCreateRole = role
+                ZugZug.LFG.currentCreateRoleOwner = playerName
             end
         end
     end
@@ -288,6 +291,22 @@ function ZugZug_GetEnableLFGNotifications()
     return true
 end
 
+function ZugZug_SetShowCapyChatInMainChat(enabled)
+    if not ZugZugDB then ZugZugDB = {} end
+    if enabled then
+        ZugZugDB.showCapyChatInMainChat = true
+        ZugZug.showCapyChatInMainChat = true
+    else
+        ZugZugDB.showCapyChatInMainChat = false
+        ZugZug.showCapyChatInMainChat = false
+    end
+end
+
+function ZugZug_GetShowCapyChatInMainChat()
+    if ZugZug.showCapyChatInMainChat then return true end
+    return false
+end
+
 function ZugZug_NormalizeClass(class)
     if not class or class == "" then return "" end
 
@@ -380,6 +399,20 @@ function ZugZug_AddCapyChatLog(sender, msg, className, source)
     end
 
     ZugZug.capyChatLog = ZugZugDB.capyChatLog
+end
+
+function ZugZug_PrintCapyChatToMain(sender, msg, className)
+    if not ZugZug_GetShowCapyChatInMainChat or not ZugZug_GetShowCapyChatInMainChat() then return end
+    if not DEFAULT_CHAT_FRAME or not DEFAULT_CHAT_FRAME.AddMessage then return end
+    if not sender or sender == "" then return end
+    if not msg or msg == "" then return end
+
+    if className and className ~= "" then
+        ZugZug_SaveClassForName(sender, className)
+    end
+
+    local safeMsg = string.gsub(msg or "", "|", "||")
+    DEFAULT_CHAT_FRAME:AddMessage("|cff69ccf0Discord #capy-chat|r " .. ZugZug_ClassColorize(sender) .. ": |cffd6e7ff" .. safeMsg .. "|r")
 end
 
 function ZugZug_SetDashboardStateFromPayload(payload)
@@ -646,6 +679,7 @@ function ZugZug_AddCapyChatFromPayload(payload)
     if not msg or msg == "" then return false end
 
     ZugZug_AddCapyChatLog(sender, msg, className, source)
+    ZugZug_PrintCapyChatToMain(sender, msg, className)
     return true
 end
 
@@ -656,7 +690,13 @@ function ZugZug_AddCapyChatFromSendPayload(sender, payload)
     local msg = ZugZug_DecodeHexText(payload)
     if not msg or msg == "" then return false end
 
-    ZugZug_AddCapyChatLog(sender, msg, ZugZug_GetClassForName(sender) or "", "game")
+    local className = ZugZug_GetClassForName(sender) or ""
+    ZugZug_AddCapyChatLog(sender, msg, className, "game")
+
+    local player = UnitName("player") or ""
+    if string.lower(sender or "") ~= string.lower(player or "") then
+        ZugZug_PrintCapyChatToMain(sender, msg, className)
+    end
     return true
 end
 
@@ -670,6 +710,563 @@ function ZugZug_SendCapyChatMessage(msg)
     ZugZug_AddCapyChatLog(sender, msg, ZugZug_GetClassForName(sender) or "", "game")
     ZugZug_BroadcastAddon("CAPY_CHAT_SEND~" .. ZugZug_EncodeHexText(msg))
     return true
+end
+
+local function ZugZug_AH_GetContiguousCount(t)
+    local count = 0
+    while t and t[count + 1] do
+        count = count + 1
+    end
+    return count
+end
+
+local function ZugZug_AH_TrimLog()
+    if not ZugZugDB or not ZugZugDB.ahSearchLog then return end
+
+    local maxRows = ZugZug.AH_MAX_SEARCH_LOG or 100
+    local count = ZugZug_AH_GetContiguousCount(ZugZugDB.ahSearchLog)
+
+    while count > maxRows do
+        ZugZugDB.ahSearchLog[count] = nil
+        count = count - 1
+    end
+
+    ZugZugDB.ahSearchLog.n = count
+    ZugZug.ahSearchLog = ZugZugDB.ahSearchLog
+end
+
+function ZugZug_AH_GetItemIdFromLink(link)
+    if not link then return 0 end
+
+    local _, _, itemId = string.find(link, "item:(%d+)")
+    return tonumber(itemId) or 0
+end
+
+function ZugZug_AH_NormalizeIcon(icon)
+    if type(icon) ~= "string" then return "" end
+    icon = ZugZug_NormalizeString(icon or "") or ""
+    if icon == "" then return "" end
+
+    icon = string.gsub(icon, "/", "\\")
+
+    local lower = string.lower(icon)
+    local _, _, fileToken = string.find(lower, "icons\\large\\([^\\]+)%.jpg")
+    if fileToken and fileToken ~= "" then
+        icon = fileToken
+    end
+
+    if string.find(icon, "\\", 1, true) then
+        return icon
+    end
+
+    icon = string.gsub(icon, "%.blp$", "")
+    icon = string.gsub(icon, "%.jpg$", "")
+    icon = string.gsub(icon, "%.tga$", "")
+
+    if icon == "" then return "" end
+
+    return "Interface\\Icons\\" .. icon
+end
+
+local function ZugZug_AH_IsIconTexture(value)
+    if type(value) ~= "string" then return false end
+    if value == "" then return false end
+
+    local lower = string.lower(value)
+    if string.find(lower, "interface\\icons\\", 1, true) then return true end
+    if string.find(lower, "interface/icons/", 1, true) then return true end
+    if string.find(lower, "^inv_") then return true end
+    if string.find(lower, "^spell_") then return true end
+    if string.find(lower, "^ability_") then return true end
+    if string.find(lower, "^trade_") then return true end
+    if string.find(lower, "^item_") then return true end
+    return false
+end
+
+local function ZugZug_AH_ReadItemInfo(link)
+    local info = {
+        name = "",
+        link = link or "",
+        texture = "",
+    }
+
+    if not GetItemInfo or not link or link == "" then
+        return info
+    end
+
+    local name, resolvedLink, quality, level, typeName, subType, stackCount, equipLoc, textureOrSellPrice, sellPriceOrTexture = GetItemInfo(link)
+    info.name = name or ""
+    info.link = resolvedLink or link
+
+    if ZugZug_AH_IsIconTexture(textureOrSellPrice) then
+        info.texture = textureOrSellPrice
+    elseif ZugZug_AH_IsIconTexture(sellPriceOrTexture) then
+        info.texture = sellPriceOrTexture
+    else
+        info.texture = ""
+    end
+
+    return info
+end
+
+function ZugZug_AH_BuildItemLink(itemId)
+    itemId = tonumber(itemId or 0) or 0
+    if itemId <= 0 then return "" end
+    return "item:" .. tostring(itemId) .. ":0:0:0"
+end
+
+function ZugZug_AH_GetItemInfoFromLink(link)
+    local itemId = ZugZug_AH_GetItemIdFromLink(link)
+    local itemName = ""
+    local itemLink = link or ""
+    local icon = ""
+
+    if GetItemInfo and (link and link ~= "") then
+        local localInfo = ZugZug_AH_ReadItemInfo(link)
+        itemName = localInfo.name or itemName
+        itemLink = localInfo.link or itemLink
+        icon = ZugZug_AH_NormalizeIcon(localInfo.texture or icon)
+    end
+
+    if itemName == "" and link then
+        local _, _, linkedName = string.find(link, "%[(.-)%]")
+        itemName = linkedName or ""
+    end
+
+    if itemName == "" and itemId > 0 then
+        itemName = "Item " .. tostring(itemId)
+    end
+
+    return {
+        itemId = itemId,
+        itemName = itemName,
+        itemLink = itemLink,
+        icon = ZugZug_AH_NormalizeIcon(icon),
+    }
+end
+
+function ZugZug_AH_FormatCopper(value)
+    local copper = tonumber(value or 0) or 0
+    if copper < 0 then copper = 0 end
+
+    local gold = math.floor(copper / 10000)
+    local silver = math.floor((copper - (gold * 10000)) / 100)
+    local copperOnly = copper - (gold * 10000) - (silver * 100)
+
+    return tostring(gold) .. "g " .. tostring(silver) .. "s " .. tostring(copperOnly) .. "c"
+end
+
+function ZugZug_AH_TimeAgo(timestamp)
+    local ts = tonumber(timestamp or 0) or 0
+    if ts <= 0 then return "just now" end
+
+    local diff = time() - ts
+    if diff < 0 then diff = 0 end
+
+    if diff < 60 then return tostring(diff) .. "s ago" end
+    if diff < 3600 then return tostring(math.floor(diff / 60)) .. "m ago" end
+    if diff < 86400 then return tostring(math.floor(diff / 3600)) .. "h ago" end
+    return tostring(math.floor(diff / 86400)) .. "d ago"
+end
+
+function ZugZug_AH_SetOnlyMine(enabled)
+    if not ZugZugDB then ZugZugDB = {} end
+
+    if enabled then
+        ZugZugDB.ahOnlyMine = true
+        ZugZug.ahOnlyMine = true
+    else
+        ZugZugDB.ahOnlyMine = false
+        ZugZug.ahOnlyMine = false
+    end
+end
+
+function ZugZug_AH_GetOnlyMine()
+    if ZugZug.ahOnlyMine then return true end
+    return false
+end
+
+function ZugZug_AH_GetSearchLog()
+    if not ZugZug.ahSearchLog then return {} end
+    return ZugZug.ahSearchLog
+end
+
+function ZugZug_AH_GetCachedPrice(itemId)
+    itemId = tonumber(itemId or 0) or 0
+    if itemId <= 0 then return nil end
+    if not ZugZug.ahPriceCacheByItemId then return nil end
+    return ZugZug.ahPriceCacheByItemId[tostring(itemId)]
+end
+
+function ZugZug_AH_ClearResults()
+    if not ZugZugDB then ZugZugDB = {} end
+
+    ZugZugDB.ahSearchLog = {}
+    ZugZugDB.ahSearchLog.n = 0
+    ZugZugDB.ahPriceCacheByItemId = {}
+
+    ZugZug.ahSearchLog = ZugZugDB.ahSearchLog
+    ZugZug.ahPriceCacheByItemId = ZugZugDB.ahPriceCacheByItemId
+end
+
+local function ZugZug_AH_SendResolvedSearch(query, itemId, itemName, itemLink)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return false end
+
+    query = ZugZug_NormalizeString(query)
+    itemId = tonumber(itemId or 0) or 0
+    itemName = ZugZug_NormalizeString(itemName or "") or query or ""
+    itemLink = itemLink or ""
+
+    if not query or query == "" then query = itemName end
+    if not query or query == "" then return false end
+    if itemId > 0 and itemLink == "" then itemLink = ZugZug_AH_BuildItemLink(itemId) end
+
+    if itemLink ~= "" then
+        local localInfo = ZugZug_AH_ReadItemInfo(itemLink)
+        itemName = localInfo.name or itemName
+        itemLink = localInfo.link or itemLink
+    end
+
+    local body = table.concat({
+        ZugZug_SafeEncodeText(query or ""),
+        tostring(itemId),
+        ZugZug_SafeEncodeText(itemName or query or ""),
+        ZugZug_SafeEncodeText(itemLink or ""),
+    }, "|")
+
+    ZugZug_BroadcastAddon("AH_SEARCH_REQ~" .. ZugZug_EncodeHexText(body))
+    return true
+end
+
+function ZugZug_AH_SendSearch(query, itemLink)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return false end
+
+    query = ZugZug_NormalizeString(query)
+    itemLink = itemLink or ""
+
+    local info = nil
+    if itemLink ~= "" then
+        info = ZugZug_AH_GetItemInfoFromLink(itemLink)
+    elseif query and query ~= "" and string.find(query, "item:", 1, true) then
+        info = ZugZug_AH_GetItemInfoFromLink(query)
+    end
+
+    if (not info or not info.itemId or info.itemId <= 0) and query and string.find(query, "^%d+$") then
+        info = ZugZug_AH_GetItemInfoFromLink(ZugZug_AH_BuildItemLink(tonumber(query) or 0))
+    end
+
+    if info and info.itemId and info.itemId > 0 then
+        if (not query or query == "") and info.itemName and info.itemName ~= "" then
+            query = info.itemName
+        end
+        return ZugZug_AH_SendResolvedSearch(query, info.itemId, info.itemName, info.itemLink)
+    end
+
+    if query and query ~= "" then
+        return ZugZug_AH_SendResolvedSearch(query, 0, "", "", "")
+    end
+
+    return false
+end
+
+function ZugZug_AH_AddResult(row)
+    if not row then return false end
+    if not ZugZugDB then ZugZugDB = {} end
+    if not ZugZugDB.ahSearchLog then ZugZugDB.ahSearchLog = {} end
+    if not ZugZugDB.ahPriceCacheByItemId then ZugZugDB.ahPriceCacheByItemId = {} end
+
+    local maxRows = ZugZug.AH_MAX_SEARCH_LOG or 100
+    local itemId = tonumber(row.itemId or 0) or 0
+    local compacted = {}
+    local compactIndex = 1
+    local i = 1
+    local count = ZugZug_AH_GetContiguousCount(ZugZugDB.ahSearchLog)
+
+    while i <= count do
+        local existing = ZugZugDB.ahSearchLog[i]
+        local existingItemId = 0
+
+        if existing then
+            existingItemId = tonumber(existing.itemId or 0) or 0
+        end
+
+        if existing and not (itemId > 0 and existingItemId == itemId) then
+            compacted[compactIndex] = existing
+            compactIndex = compactIndex + 1
+        end
+
+        i = i + 1
+    end
+
+    ZugZug_ClearTable(ZugZugDB.ahSearchLog)
+
+    i = 1
+    while i < maxRows and compacted[i] do
+        ZugZugDB.ahSearchLog[i + 1] = compacted[i]
+        i = i + 1
+    end
+
+    ZugZugDB.ahSearchLog[1] = row
+    ZugZug_AH_TrimLog()
+
+    if row.itemId and row.itemId > 0 then
+        ZugZugDB.ahPriceCacheByItemId[tostring(row.itemId)] = {
+            itemId = row.itemId,
+            itemName = row.itemName,
+            itemLink = row.itemLink,
+            minBuyout = row.minBuyout,
+            avgBuyout = row.avgBuyout,
+            auctionCount = row.auctionCount,
+            searchedAt = row.searchedAt,
+        }
+    end
+
+    ZugZug.ahSearchLog = ZugZugDB.ahSearchLog
+    ZugZug.ahPriceCacheByItemId = ZugZugDB.ahPriceCacheByItemId
+    return true
+end
+
+function ZugZug_AH_SetResultFromPayload(payload)
+    if not payload or payload == "" then return false end
+
+    local body = ZugZug_DecodeHexText(payload)
+    if not body or body == "" then return false end
+
+    local fields = ZugZug_SplitDelimited(body, "|")
+    local requester = ZugZug_SafeDecodeText(fields[1] or "")
+    local query = ZugZug_SafeDecodeText(fields[2] or "")
+    local itemId = tonumber(fields[3] or "0") or 0
+    local itemName = ZugZug_SafeDecodeText(fields[4] or "")
+    local itemLink = ZugZug_SafeDecodeText(fields[5] or "")
+    local minIndex = 6
+    if fields[10] then
+        minIndex = 7
+    end
+    local minBuyout = tonumber(fields[minIndex] or "0") or 0
+    local avgBuyout = tonumber(fields[minIndex + 1] or "0") or 0
+    local auctionCount = tonumber(fields[minIndex + 2] or "0") or 0
+    local searchedAt = tonumber(fields[minIndex + 3] or "0") or time()
+
+    if not requester or requester == "" then return false end
+    if (not query or query == "") and (not itemName or itemName == "") then return false end
+    if itemId <= 0 then return false end
+    if not itemLink or itemLink == "" then itemLink = ZugZug_AH_BuildItemLink(itemId) end
+
+    if itemLink ~= "" then
+        local localInfo = ZugZug_AH_ReadItemInfo(itemLink)
+        itemName = localInfo.name or itemName
+        itemLink = localInfo.link or itemLink
+    end
+
+    local row = {
+        requester = requester,
+        query = query,
+        itemId = itemId,
+        itemName = itemName,
+        itemLink = itemLink,
+        minBuyout = minBuyout,
+        avgBuyout = avgBuyout,
+        auctionCount = auctionCount,
+        searchedAt = searchedAt,
+    }
+
+    return ZugZug_AH_AddResult(row)
+end
+
+function ZugZug_AH_SetFocusedEdit(edit)
+    ZugZug.ahFocusedEdit = edit
+end
+
+function ZugZug_AH_SetActiveEdit(edit)
+    ZugZug.ahActiveEdit = edit
+end
+
+function ZugZug_AH_TryInsertLink(link)
+    if not link or link == "" then return false end
+    if not ZugZug.UI or ZugZug.UI.activeTab ~= "auction" then return false end
+    local edit = ZugZug.ahFocusedEdit or ZugZug.ahActiveEdit
+    if not edit then return false end
+    if edit.IsVisible and not edit:IsVisible() then return false end
+
+    local info = ZugZug_AH_GetItemInfoFromLink(link)
+    if not info or not info.itemId or info.itemId <= 0 then return false end
+    if not info.itemName or info.itemName == "" then return false end
+
+    edit.ahSettingText = true
+    edit:SetText(info.itemName)
+    edit.ahSettingText = nil
+    edit.ahItemLink = info.itemLink or link
+    edit.ahItemId = info.itemId or 0
+    return true
+end
+
+function ZugZug_AH_GetLocalIcon(row)
+    if not row then return "" end
+
+    local itemLink = row.itemLink or ""
+    if (not itemLink or itemLink == "") and row.itemId and row.itemId > 0 then
+        itemLink = ZugZug_AH_BuildItemLink(row.itemId)
+    end
+
+    if itemLink and itemLink ~= "" then
+        local localInfo = ZugZug_AH_ReadItemInfo(itemLink)
+        return ZugZug_AH_NormalizeIcon(localInfo.texture or "")
+    end
+
+    return ""
+end
+
+local function ZugZug_AH_AddTooltipLines(tooltip, link)
+    if not tooltip or not link then return end
+
+    local itemId = ZugZug_AH_GetItemIdFromLink(link)
+    local cached = ZugZug_AH_GetCachedPrice(itemId)
+    if not cached then return end
+
+    tooltip:AddLine(" ")
+    tooltip:AddLine("|cff69ccf0AH Min Buyout:|r " .. ZugZug_AH_FormatCopper(cached.minBuyout or 0), 1, 1, 1)
+    tooltip:AddLine("|cff69ccf0AH Avg Buyout:|r " .. ZugZug_AH_FormatCopper(cached.avgBuyout or 0), 1, 1, 1)
+    tooltip:AddLine("|cff69ccf0AH Listings:|r " .. tostring(cached.auctionCount or 0), 1, 1, 1)
+    tooltip:Show()
+end
+
+local function ZugZug_AH_TryInsertContainerItem(bag, slot)
+    if not IsShiftKeyDown or not IsShiftKeyDown() then return false end
+    if not ZugZug.UI or ZugZug.UI.activeTab ~= "auction" then return false end
+    if not GetContainerItemLink then return false end
+
+    bag = tonumber(bag or 0)
+    slot = tonumber(slot or 0)
+    if not bag or not slot then return false end
+
+    local link = GetContainerItemLink(bag, slot)
+    if link and ZugZug_AH_TryInsertLink and ZugZug_AH_TryInsertLink(link) then
+        return true
+    end
+
+    return false
+end
+
+local function ZugZug_AH_GetContainerSlotFromButton(button)
+    local frame = button or this
+    if not frame then return nil, nil end
+    if type(frame) ~= "table" and type(frame) ~= "userdata" then return nil, nil end
+
+    local slot = nil
+    if frame.GetID then
+        slot = frame:GetID()
+    end
+
+    local parent = nil
+    if frame.GetParent then
+        parent = frame:GetParent()
+    end
+
+    local bag = nil
+    if parent and parent.GetID then
+        bag = parent:GetID()
+    end
+
+    return bag, slot
+end
+
+function ZugZug_AH_HookTooltips()
+    if ZugZug.ahHooksInstalled then return end
+    ZugZug.ahHooksInstalled = true
+
+    if ChatEdit_InsertLink then
+        ZugZug.ahOriginalChatEditInsertLink = ChatEdit_InsertLink
+        ChatEdit_InsertLink = function(link)
+            if ZugZug_AH_TryInsertLink and ZugZug_AH_TryInsertLink(link) then
+                return true
+            end
+
+            return ZugZug.ahOriginalChatEditInsertLink(link)
+        end
+    end
+
+    if HandleModifiedItemClick then
+        ZugZug.ahOriginalHandleModifiedItemClick = HandleModifiedItemClick
+        HandleModifiedItemClick = function(link)
+            if IsShiftKeyDown and IsShiftKeyDown() and ZugZug_AH_TryInsertLink and ZugZug_AH_TryInsertLink(link) then
+                return true
+            end
+
+            return ZugZug.ahOriginalHandleModifiedItemClick(link)
+        end
+    end
+
+    if UseContainerItem then
+        ZugZug.ahOriginalUseContainerItem = UseContainerItem
+        UseContainerItem = function(bag, slot, onSelf)
+            if ZugZug_AH_TryInsertContainerItem(bag, slot) then
+                return
+            end
+
+            return ZugZug.ahOriginalUseContainerItem(bag, slot, onSelf)
+        end
+    end
+
+    if PickupContainerItem then
+        ZugZug.ahOriginalPickupContainerItem = PickupContainerItem
+        PickupContainerItem = function(bag, slot)
+            if ZugZug_AH_TryInsertContainerItem(bag, slot) then
+                return
+            end
+
+            return ZugZug.ahOriginalPickupContainerItem(bag, slot)
+        end
+    end
+
+    if ContainerFrameItemButton_OnClick then
+        ZugZug.ahOriginalContainerFrameItemButtonOnClick = ContainerFrameItemButton_OnClick
+        ContainerFrameItemButton_OnClick = function(button, ignoreShift)
+            local bag, slot = ZugZug_AH_GetContainerSlotFromButton(this)
+            if not bag or not slot then
+                bag, slot = ZugZug_AH_GetContainerSlotFromButton(button)
+            end
+            if ZugZug_AH_TryInsertContainerItem(bag, slot) then
+                return
+            end
+
+            return ZugZug.ahOriginalContainerFrameItemButtonOnClick(button, ignoreShift)
+        end
+    end
+
+    if ContainerFrameItemButton_OnModifiedClick then
+        ZugZug.ahOriginalContainerFrameItemButtonOnModifiedClick = ContainerFrameItemButton_OnModifiedClick
+        ContainerFrameItemButton_OnModifiedClick = function(button)
+            local bag, slot = ZugZug_AH_GetContainerSlotFromButton(this)
+            if not bag or not slot then
+                bag, slot = ZugZug_AH_GetContainerSlotFromButton(button)
+            end
+            if ZugZug_AH_TryInsertContainerItem(bag, slot) then
+                return true
+            end
+
+            return ZugZug.ahOriginalContainerFrameItemButtonOnModifiedClick(button)
+        end
+    end
+
+    if GameTooltip and GameTooltip.SetHyperlink then
+        ZugZug.ahOriginalTooltipSetHyperlink = GameTooltip.SetHyperlink
+        GameTooltip.SetHyperlink = function(self, link)
+            local result = ZugZug.ahOriginalTooltipSetHyperlink(self, link)
+            ZugZug_AH_AddTooltipLines(self, link)
+            return result
+        end
+    end
+
+    if GameTooltip and GameTooltip.SetBagItem then
+        ZugZug.ahOriginalTooltipSetBagItem = GameTooltip.SetBagItem
+        GameTooltip.SetBagItem = function(self, bag, slot)
+            local result = ZugZug.ahOriginalTooltipSetBagItem(self, bag, slot)
+            if GetContainerItemLink then
+                ZugZug_AH_AddTooltipLines(self, GetContainerItemLink(bag, slot))
+            end
+            return result
+        end
+    end
 end
 
 function ZugZug_FormatMoney(gold, silver, copper)

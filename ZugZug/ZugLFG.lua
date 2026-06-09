@@ -10,6 +10,7 @@ ZugZug.LFG.currentCreateTarget = nil
 ZugZug.LFG.currentCustomTarget = ""
 ZugZug.LFG.currentCreateNote = ""
 ZugZug.LFG.currentCreateRole = "DPS"
+ZugZug.LFG.currentCreateRoleOwner = nil
 ZugZug.LFG.createNeedTank = 1
 ZugZug.LFG.createNeedHealer = 1
 ZugZug.LFG.createNeedDps = 3
@@ -68,8 +69,8 @@ end
 
 local function ZugZug_LFG_RefreshUIImmediate()
     if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-        if ZugZug_UI_RefreshActiveTab then
-            ZugZug_UI_RefreshActiveTab()
+        if ZugZug_UI_ForceRebuildTab then
+            ZugZug_UI_ForceRebuildTab("lfg")
         else
             ZugZug_UI_ShowTab("lfg")
         end
@@ -78,8 +79,8 @@ end
 
 local function ZugZug_LFG_RefreshUIThrottled(reason)
     if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-        if ZugZug_UI_RefreshActiveTabThrottled then
-            ZugZug_UI_RefreshActiveTabThrottled(reason or "lfg", 0.25)
+        if ZugZug_UI_UpdateActiveTabThrottled then
+            ZugZug_UI_UpdateActiveTabThrottled(reason or "lfg", 0.25)
         else
             ZugZug_UI_ShowTab("lfg")
         end
@@ -271,12 +272,34 @@ function ZugZug_LFG_IsListingFull(listing)
     return true
 end
 
+local function ZugZug_LFG_SetCachedCreateRole(role, owner)
+    if not ZugZug_LFG_IsValidRole(role) then
+        role = "DPS"
+    end
+
+    if not owner or owner == "" then
+        owner = UnitName("player")
+    end
+
+    ZugZug.LFG.currentCreateRole = role
+    ZugZug.LFG.currentCreateRoleOwner = owner
+end
+
 function ZugZug_LFG_GetCreateRole()
+    local player = UnitName("player")
+
+    if ZugZug.LFG.currentCreateRoleOwner ~= player then
+        local savedRole = ZugZug_LFG_GetSavedRoleForMember(player)
+        ZugZug_LFG_SetCachedCreateRole(savedRole, player)
+        return savedRole
+    end
+
     if ZugZug_LFG_IsValidRole(ZugZug.LFG.currentCreateRole) then
         return ZugZug.LFG.currentCreateRole
     end
+
     local savedRole = ZugZug_LFG_GetSavedRoleForMember(UnitName("player"))
-    ZugZug.LFG.currentCreateRole = savedRole
+    ZugZug_LFG_SetCachedCreateRole(savedRole, player)
     return savedRole
 end
 
@@ -284,7 +307,7 @@ function ZugZug_LFG_SetCreateRole(role)
     if not ZugZug_LFG_IsValidRole(role) then
         role = "DPS"
     end
-    ZugZug.LFG.currentCreateRole = role
+    ZugZug_LFG_SetCachedCreateRole(role, UnitName("player"))
     if ZugZug_SaveLFGRole then
         ZugZug_SaveLFGRole(UnitName("player"), role)
     end
@@ -710,7 +733,7 @@ function ZugZug_LFG_SetListingMemberRole(id, name, role)
     if ZugZug_LFG_SetLocalMemberRole(listing, name, role) then
         if name == UnitName("player") then
             listing.leaderRole = role
-            ZugZug.LFG.currentCreateRole = role
+            ZugZug_LFG_SetCachedCreateRole(role, UnitName("player"))
         end
         ZugZug_LFG_BroadcastListing(listing)
         ZugZug_LFG_RefreshUIImmediate()
@@ -740,7 +763,7 @@ function ZugZug_LFG_RequestMyRoleChange(id, role)
         ZugZug_SaveLFGRole(UnitName("player"), role)
     end
 
-    ZugZug.LFG.currentCreateRole = role
+    ZugZug_LFG_SetCachedCreateRole(role, UnitName("player"))
 
     local listing = ZugZug.LFG.listings[id]
     if not listing then return end
@@ -1109,7 +1132,7 @@ function ZugZug_LFG_JoinListing(id, role)
         ZugZug_SaveLFGRole(UnitName("player"), role)
     end
 
-    ZugZug.LFG.currentCreateRole = role
+    ZugZug_LFG_SetCachedCreateRole(role, UnitName("player"))
     ZugZug.LFG.pendingAutoAcceptLeader = listing.leader
     ZugZug.LFG.pendingAutoAcceptListingId = id
     ZugZug.LFG.pendingAutoAcceptExpires = time() + 20
@@ -1496,7 +1519,7 @@ function ZugZug_LFG_StartTicker()
         end
 
         this.elapsed = (this.elapsed or 0) + arg1
-        if this.elapsed < 3 then return end
+        if this.elapsed < 5 then return end
         this.elapsed = 0
 
         ZugZug_LFG_OnUpdate()

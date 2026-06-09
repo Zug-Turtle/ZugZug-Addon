@@ -3,6 +3,7 @@ ZugZug.UI.frame = nil
 ZugZug.UI.tabs = {}
 ZugZug.UI.pages = {}
 ZugZug.UI.activeTab = nil
+ZugZug.UI.tabsByKey = {}
 
 local ZUG_UI_WIDTH = 670
 local ZUG_UI_HEIGHT = 460
@@ -483,7 +484,7 @@ local function ZugZug_UI_CreateTypePicker(parent)
                 this.parentPicker.typePanel:Hide()
             end
 
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
 
         i = i + 1
@@ -892,17 +893,29 @@ function ZugZug_UI_RegisterTab(key, label, buildFunc)
     tab.label = label
     tab.page = page
     tab.buildFunc = buildFunc
+    tab.updateFunc = nil
+    tab.built = false
 
     tab:SetScript("OnClick", function()
         ZugZug_UI_ShowTab(this.key)
     end)
 
     ZugZug.UI.tabs[tabIndex] = tab
+    ZugZug.UI.tabsByKey[key] = tab
     ZugZug.UI.pages[key] = page
     ZugZug_UI_LayoutTabs()
 end
 
-function ZugZug_UI_ShowTab(key)
+function ZugZug_UI_SetTabUpdateFunc(key, updateFunc)
+    if not key or not updateFunc then return end
+    if not ZugZug.UI or not ZugZug.UI.tabsByKey then return end
+    local tab = ZugZug.UI.tabsByKey[key]
+    if tab then
+        tab.updateFunc = updateFunc
+    end
+end
+
+function ZugZug_UI_ShowTab(key, forceRebuild)
     if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
         if ZugZug_DisableForNonGuild then
             ZugZug_DisableForNonGuild()
@@ -918,8 +931,14 @@ function ZugZug_UI_ShowTab(key)
             ZugZug_UI_SetTabSelected(tab, true)
             ZugZug.UI.activeTab = key
 
-            ZugZug_UI_ClearPage(tab.page)
-            tab.buildFunc(tab.page)
+            if forceRebuild or not tab.built then
+                ZugZug_UI_ClearPage(tab.page)
+                tab.page.refs = {}
+                tab.buildFunc(tab.page)
+                tab.built = true
+            elseif tab.updateFunc then
+                tab.updateFunc(tab.page, "show")
+            end
 
             ZugZug.UI.refreshCount = (ZugZug.UI.refreshCount or 0) + 1
         else
@@ -930,7 +949,27 @@ function ZugZug_UI_ShowTab(key)
     end
 end
 
-function ZugZug_UI_RefreshActiveTab()
+function ZugZug_UI_ForceRebuildTab(key)
+    if not key or not ZugZug.UI or not ZugZug.UI.tabsByKey then return end
+    local tab = ZugZug.UI.tabsByKey[key]
+    if tab then
+        tab.built = false
+    end
+
+    ZugZug_UI_ShowTab(key, true)
+end
+
+function ZugZug_UI_UpdateTab(key, reason)
+    if not key or not ZugZug.UI or not ZugZug.UI.tabsByKey then return end
+    local tab = ZugZug.UI.tabsByKey[key]
+    if not tab or not tab.built then return end
+    if not tab.page or not tab.page:IsShown() then return end
+    if tab.updateFunc then
+        tab.updateFunc(tab.page, reason or "update")
+    end
+end
+
+function ZugZug_UI_UpdateActiveTab(reason)
     if not ZugZug.UI then return end
     if not ZugZug.UI.activeTab then return end
 
@@ -943,10 +982,14 @@ function ZugZug_UI_RefreshActiveTab()
         ZugZug.UI.refreshDelay = nil
     end
 
-    ZugZug_UI_ShowTab(ZugZug.UI.activeTab)
+    ZugZug_UI_UpdateTab(ZugZug.UI.activeTab, reason or "active")
 end
 
-function ZugZug_UI_RefreshActiveTabThrottled(reason, delay)
+function ZugZug_UI_RefreshActiveTab()
+    ZugZug_UI_UpdateActiveTab("refresh")
+end
+
+function ZugZug_UI_UpdateActiveTabThrottled(reason, delay)
     if not ZugZug.UI then return end
     if not ZugZug.UI.activeTab then return end
 
@@ -983,11 +1026,17 @@ function ZugZug_UI_RefreshActiveTabThrottled(reason, delay)
         end
 
         this:SetScript("OnUpdate", nil)
+        local pendingReason = ZugZug.UI.pendingRefreshReason or "throttled"
         ZugZug.UI.refreshScheduled = nil
         ZugZug.UI.refreshDelay = nil
+        ZugZug.UI.pendingRefreshReason = nil
 
-        ZugZug_UI_RefreshActiveTab()
+        ZugZug_UI_UpdateActiveTab(pendingReason)
     end)
+end
+
+function ZugZug_UI_RefreshActiveTabThrottled(reason, delay)
+    ZugZug_UI_UpdateActiveTabThrottled(reason, delay)
 end
 
 function ZugZug_UI_Show()
@@ -1062,6 +1111,14 @@ local function ZugZug_UI_AddChatMessages(chatFrame, rows, color)
     end
 end
 
+local function ZugZug_UI_SetChatMessages(chatFrame, rows, color)
+    if not chatFrame then return end
+    if chatFrame.Clear then
+        chatFrame:Clear()
+    end
+    ZugZug_UI_AddChatMessages(chatFrame, rows, color)
+end
+
 local function ZugZug_UI_CreateChatPanel(parent, titleText, rows, color, width, height)
     local panel = ZugZug_UI_CreateCard(parent, width, height)
 
@@ -1121,22 +1178,42 @@ local function ZugZug_UI_CreateCapyChatPanel(parent, width, height)
     inputFrame:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 10, 10)
     input:SetMaxLetters(220)
 
+    local function clearCapyChatFocus()
+        if input and input.ClearFocus then
+            input:ClearFocus()
+        end
+    end
+
+    panel:EnableMouse(true)
+    panel:SetScript("OnMouseDown", clearCapyChatFocus)
+    chatFrame:EnableMouse(true)
+    chatFrame:SetScript("OnMouseDown", clearCapyChatFocus)
+
+    if ZugZug.UI and ZugZug.UI.refocusCapyChatInput then
+        ZugZug.UI.refocusCapyChatInput = nil
+        input:SetFocus()
+    end
+
     local sendButton = ZugZug_UI_CreateButton(panel, nil, "Send", 54, 24)
     sendButton:SetPoint("LEFT", inputFrame, "RIGHT", 6, 0)
+    sendButton:SetScript("OnMouseDown", clearCapyChatFocus)
 
     local function sendMessage()
         local text = input:GetText() or ""
         if ZugZug_SendCapyChatMessage and ZugZug_SendCapyChatMessage(text) then
             input:SetText("")
-            input:ClearFocus()
-            if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
-                ZugZug_UI_ShowTab("dashboard")
+            input:SetFocus()
+            if panel.chatFrame then
+                ZugZug_UI_SetChatMessages(panel.chatFrame, ZugZug.capyChatLog or {}, "cffd6e7ff")
             end
         end
     end
 
     sendButton:SetScript("OnClick", sendMessage)
     input:SetScript("OnEnterPressed", sendMessage)
+
+    panel.chatFrame = chatFrame
+    panel.input = input
 
     return panel
 end
@@ -1218,7 +1295,7 @@ local function ZugZug_UI_CreateDashboardLFGPanel(parent, width, height)
         local openButton = ZugZug_UI_CreateButton(lfgPanel, nil, "Open LFG", 78, 20)
         openButton:SetPoint("BOTTOMRIGHT", lfgPanel, "BOTTOMRIGHT", -10, 8)
         openButton:SetScript("OnClick", function()
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
     else
         local canCreate = true
@@ -1235,7 +1312,7 @@ local function ZugZug_UI_CreateDashboardLFGPanel(parent, width, height)
                     ZugZug_LFG_SetCreateOpen(true)
                 end
 
-                ZugZug_UI_ShowTab("lfg")
+                ZugZug_UI_ForceRebuildTab("lfg")
             end)
         end
 
@@ -1488,7 +1565,43 @@ end
 
 -- Default Tabs
 
+local function ZugZug_UI_AttachDashboardDmfCountdown(info, dmfNextText, dmfNextLocation, dmfNextAt)
+    if not info then return end
+
+    info:SetScript("OnUpdate", nil)
+
+    if not dmfNextText then return end
+
+    local function updateDashboardCountdown()
+        local dmfTime = ""
+
+        if dmfNextAt and dmfNextAt > 0 then
+            dmfTime = ZugZug_FormatTimeRemaining(dmfNextAt)
+        end
+
+        if dmfTime and dmfTime ~= "" then
+            dmfNextText:SetText("|cffffffff" .. (dmfNextLocation or "") .. "|r |cffaaaaaain " .. dmfTime .. "|r")
+        else
+            dmfNextText:SetText("|cffffffff" .. (dmfNextLocation or "") .. "|r")
+        end
+    end
+
+    updateDashboardCountdown()
+
+    info.lastCountdownUpdate = 0
+    info:SetScript("OnUpdate", function()
+        local now = GetTime()
+
+        if not this.lastCountdownUpdate or now - this.lastCountdownUpdate >= 1 then
+            this.lastCountdownUpdate = now
+            updateDashboardCountdown()
+        end
+    end)
+end
+
 local function ZugZug_UI_BuildDashboard(parent)
+    parent.refs = parent.refs or {}
+
     local title = ZugZug_UI_CreateText(parent, nil, "Dashboard", "large")
     title:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
 
@@ -1499,6 +1612,7 @@ local function ZugZug_UI_BuildDashboard(parent)
 
     local summary = ZugZug_UI_CreateText(parent, nil, "|cff00ff00Online:|r " .. tostring(onlineCount), "normal")
     summary:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, 0)
+    parent.refs.summary = summary
 
     local panelTop = -24
     local leftWidth = 315
@@ -1508,6 +1622,7 @@ local function ZugZug_UI_BuildDashboard(parent)
 
     local left = ZugZug_UI_CreateCapyChatPanel(parent, leftWidth, fullHeight)
     left:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, panelTop)
+    parent.refs.capyPanel = left
 
     local state = ZugZug.dashboardState or {}
 
@@ -1574,6 +1689,7 @@ local function ZugZug_UI_BuildDashboard(parent)
 
     local info = ZugZug_UI_CreateCard(parent, rightWidth, infoHeight)
     info:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, panelTop)
+    parent.refs.infoPanel = info
 
     local infoTitle = ZugZug_UI_CreateText(info, nil, "|cffffd100Guild Info|r", "normal")
     infoTitle:SetPoint("TOPLEFT", info, "TOPLEFT", 10, -8)
@@ -1638,38 +1754,142 @@ local function ZugZug_UI_BuildDashboard(parent)
         nextLabel:SetPoint("TOPLEFT", info, "TOPLEFT", 10, y)
         nextLabel:SetWidth(labelWidth)
 
-        local function updateDashboardCountdown()
-            local dmfTime = ""
-
-            if state.dmfNextAt and state.dmfNextAt > 0 then
-                dmfTime = ZugZug_FormatTimeRemaining(state.dmfNextAt)
-            end
-
-            if dmfTime and dmfTime ~= "" then
-                dmfNextText:SetText("|cffffffff" .. dmfNext .. "|r |cffaaaaaain " .. dmfTime .. "|r")
-            else
-                dmfNextText:SetText("|cffffffff" .. dmfNext .. "|r")
-            end
-        end
-
-        updateDashboardCountdown()
-
-        info.lastCountdownUpdate = 0
-        info:SetScript("OnUpdate", function()
-            local now = GetTime()
-
-            if not this.lastCountdownUpdate or now - this.lastCountdownUpdate >= 1 then
-                this.lastCountdownUpdate = now
-                updateDashboardCountdown()
-            end
-        end)
+        ZugZug_UI_AttachDashboardDmfCountdown(info, dmfNextText, dmfNext, state.dmfNextAt)
     end
 
     local identityPanel = ZugZug_UI_CreateIdentityPanel(parent, rightWidth, bottomRightHeight)
     identityPanel:SetPoint("TOPRIGHT", info, "BOTTOMRIGHT", 0, -gap)
+    parent.refs.identityPanel = identityPanel
+end
+
+local function ZugZug_UI_UpdateDashboard(parent, reason)
+    if not parent or not parent.refs then return end
+
+    if parent.refs.summary and parent.refs.summary.SetText then
+        local onlineCount = 0
+        if ZugZug_GetOnlineMemberCount then
+            onlineCount = ZugZug_GetOnlineMemberCount()
+        end
+        parent.refs.summary:SetText("|cff00ff00Online:|r " .. tostring(onlineCount))
+    end
+
+    if parent.refs.capyPanel and parent.refs.capyPanel.chatFrame then
+        ZugZug_UI_SetChatMessages(parent.refs.capyPanel.chatFrame, ZugZug.capyChatLog or {}, "cffd6e7ff")
+    end
+
+    if reason == "state" or reason == "identity" or reason == "motd" or reason == "guild_roster_motd" then
+        if parent.refs.infoPanel then
+            parent.refs.infoPanel:SetScript("OnUpdate", nil)
+            parent.refs.infoPanel:Hide()
+            parent.refs.infoPanel:SetParent(nil)
+            parent.refs.infoPanel = nil
+        end
+        if parent.refs.identityPanel then
+            parent.refs.identityPanel:Hide()
+            parent.refs.identityPanel:SetParent(nil)
+            parent.refs.identityPanel = nil
+        end
+
+        local rightWidth = 315
+        local fullHeight = 336
+        local gap = 4
+        local panelTop = -24
+        local state = ZugZug.dashboardState or {}
+        local motd = ""
+
+        if state.guildMotd and state.guildMotd ~= "" then
+            motd = state.guildMotd
+        elseif GetGuildRosterMOTD then
+            motd = GetGuildRosterMOTD() or ""
+        end
+
+        if motd == "" then
+            motd = "No guild MOTD."
+        end
+
+        local hasShellcoin = state.updatedAt and state.shellGold ~= nil and state.shellSilver ~= nil and state.shellCopper ~= nil
+        local hasDarkmoon = state.updatedAt and state.dmfLocation and state.dmfLocation ~= ""
+        local hasDarkmoonNext = hasDarkmoon and state.dmfNextLocation and state.dmfNextLocation ~= ""
+        local motdLines = 1
+        local motdLen = string.len(motd or "")
+        if motdLen > 42 then motdLines = 2 end
+        if motdLen > 84 then motdLines = 3 end
+
+        local infoHeight = 48 + (motdLines * 13)
+        if hasShellcoin then infoHeight = infoHeight + 18 end
+        if hasDarkmoon then infoHeight = infoHeight + 18 end
+        if hasDarkmoonNext then infoHeight = infoHeight + 18 end
+        if infoHeight < 92 then infoHeight = 92 end
+        if infoHeight > 152 then infoHeight = 152 end
+
+        local bottomRightHeight = fullHeight - infoHeight - gap
+        local info = ZugZug_UI_CreateCard(parent, rightWidth, infoHeight)
+        info:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, panelTop)
+        parent.refs.infoPanel = info
+
+        local infoTitle = ZugZug_UI_CreateText(info, nil, "|cffffd100Guild Info|r", "normal")
+        infoTitle:SetPoint("TOPLEFT", info, "TOPLEFT", 10, -8)
+
+        local y = -30
+        local labelWidth = 92
+        local valueX = 104
+        local valueWidth = rightWidth - valueX - 10
+
+        local motdLabel = ZugZug_UI_CreateText(info, nil, "|cff00ff00MOTD|r", "small")
+        motdLabel:SetPoint("TOPLEFT", info, "TOPLEFT", 10, y)
+
+        local motdText = ZugZug_UI_CreateText(info, nil, "|cffffffff" .. motd .. "|r", "small")
+        motdText:SetPoint("TOPLEFT", info, "TOPLEFT", valueX, y)
+        motdText:SetWidth(valueWidth)
+        motdText:SetJustifyH("LEFT")
+
+        y = y - (motdLines * 13) - 5
+
+        if hasShellcoin then
+            local shellLabel = ZugZug_UI_CreateText(info, nil, "|cff00ff00Shellcoin|r", "small")
+            shellLabel:SetPoint("TOPLEFT", info, "TOPLEFT", 10, y)
+            shellLabel:SetWidth(labelWidth)
+
+            local shellValue = ZugZug_UI_CreateText(info, nil, "|cffffd100" .. ZugZug_FormatMoney(state.shellGold or 0, state.shellSilver or 0, state.shellCopper or 0) .. "|r", "small")
+            shellValue:SetPoint("TOPLEFT", info, "TOPLEFT", valueX, y)
+            shellValue:SetWidth(valueWidth)
+            y = y - 18
+        end
+
+        if hasDarkmoon then
+            local dmfLabel = ZugZug_UI_CreateText(info, nil, "|cff00ff00Darkmoon Faire|r", "small")
+            dmfLabel:SetPoint("TOPLEFT", info, "TOPLEFT", 10, y)
+            dmfLabel:SetWidth(labelWidth)
+
+            local dmfCurrentText = ZugZug_UI_CreateText(info, nil, "|cffffffff" .. (state.dmfLocation or "") .. "|r", "small")
+            dmfCurrentText:SetPoint("TOPLEFT", info, "TOPLEFT", valueX, y)
+            dmfCurrentText:SetWidth(valueWidth)
+            y = y - 18
+        end
+
+        if hasDarkmoonNext then
+            local nextLabel = ZugZug_UI_CreateText(info, nil, "|cffaaaaaaNext Location|r", "small")
+            nextLabel:SetPoint("TOPLEFT", info, "TOPLEFT", 10, y)
+            nextLabel:SetWidth(labelWidth)
+
+            local dmfNext = state.dmfNextLocation or ""
+
+            local dmfNextText = ZugZug_UI_CreateText(info, nil, "", "small")
+            dmfNextText:SetPoint("TOPLEFT", info, "TOPLEFT", valueX, y)
+            dmfNextText:SetWidth(valueWidth)
+
+            ZugZug_UI_AttachDashboardDmfCountdown(info, dmfNextText, dmfNext, state.dmfNextAt)
+        end
+
+        local identityPanel = ZugZug_UI_CreateIdentityPanel(parent, rightWidth, bottomRightHeight)
+        identityPanel:SetPoint("TOPRIGHT", info, "BOTTOMRIGHT", 0, -gap)
+        parent.refs.identityPanel = identityPanel
+    end
 end
 
 local function ZugZug_UI_BuildLFG(parent)
+    parent.refs = parent.refs or {}
+
     local title = ZugZug_UI_CreateText(parent, nil, "Guild LFG", "large")
     title:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
 
@@ -1701,7 +1921,7 @@ local function ZugZug_UI_BuildLFG(parent)
 
             ZugZug.UI.selectedJoinListingId = nil
             ZugZug.UI.confirmCloseListingId = nil
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
     end
 
@@ -1766,21 +1986,21 @@ local function ZugZug_UI_BuildLFG(parent)
         tankRole:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -82)
         tankRole:SetScript("OnClick", function()
             ZugZug_LFG_SetCreateRole("TANK")
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
 
         local healerRole = ZugZug_UI_CreateRoleChoiceButton(panel, "HEALER", selectedRole == "HEALER", 72, 22)
         healerRole:SetPoint("LEFT", tankRole, "RIGHT", 8, 0)
         healerRole:SetScript("OnClick", function()
             ZugZug_LFG_SetCreateRole("HEALER")
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
 
         local dpsRole = ZugZug_UI_CreateRoleChoiceButton(panel, "DPS", selectedRole == "DPS", 72, 22)
         dpsRole:SetPoint("LEFT", healerRole, "RIGHT", 8, 0)
         dpsRole:SetScript("OnClick", function()
             ZugZug_LFG_SetCreateRole("DPS")
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
 
         local needLabel = ZugZug_UI_CreateText(panel, nil, "Need", "small")
@@ -1796,14 +2016,14 @@ local function ZugZug_UI_BuildLFG(parent)
         tankMinus:SetPoint("LEFT", tankText, "RIGHT", 8, 0)
         tankMinus:SetScript("OnClick", function()
             ZugZug_LFG_AdjustNeed("TANK", -1)
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
 
         local tankPlus = ZugZug_UI_CreateButton(panel, nil, "+", 20, 18)
         tankPlus:SetPoint("LEFT", tankMinus, "RIGHT", 2, 0)
         tankPlus:SetScript("OnClick", function()
             ZugZug_LFG_AdjustNeed("TANK", 1)
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
 
         local healerIcon = ZugZug_UI_CreateRoleIcon(panel, "HEALER", 18)
@@ -1816,14 +2036,14 @@ local function ZugZug_UI_BuildLFG(parent)
         healerMinus:SetPoint("LEFT", healerText, "RIGHT", 8, 0)
         healerMinus:SetScript("OnClick", function()
             ZugZug_LFG_AdjustNeed("HEALER", -1)
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
 
         local healerPlus = ZugZug_UI_CreateButton(panel, nil, "+", 20, 18)
         healerPlus:SetPoint("LEFT", healerMinus, "RIGHT", 2, 0)
         healerPlus:SetScript("OnClick", function()
             ZugZug_LFG_AdjustNeed("HEALER", 1)
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
 
         local dpsIcon = ZugZug_UI_CreateRoleIcon(panel, "DPS", 18)
@@ -1836,14 +2056,14 @@ local function ZugZug_UI_BuildLFG(parent)
         dpsMinus:SetPoint("LEFT", dpsText, "RIGHT", 8, 0)
         dpsMinus:SetScript("OnClick", function()
             ZugZug_LFG_AdjustNeed("DPS", -1)
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
 
         local dpsPlus = ZugZug_UI_CreateButton(panel, nil, "+", 20, 18)
         dpsPlus:SetPoint("LEFT", dpsMinus, "RIGHT", 2, 0)
         dpsPlus:SetScript("OnClick", function()
             ZugZug_LFG_AdjustNeed("DPS", 1)
-            ZugZug_UI_ShowTab("lfg")
+            ZugZug_UI_ForceRebuildTab("lfg")
         end)
 
         listTop = -180
@@ -1855,9 +2075,11 @@ local function ZugZug_UI_BuildLFG(parent)
     scrollFrame:SetWidth(634)
     scrollFrame:SetHeight(listHeight)
     scrollFrame:EnableMouseWheel(true)
+    parent.refs.scrollFrame = scrollFrame
 
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
     scrollChild:SetWidth(634)
+    parent.refs.scrollChild = scrollChild
 
     local cardWidth = 306
     local cardHeight = 132
@@ -2056,7 +2278,7 @@ local function ZugZug_UI_BuildLFG(parent)
                     cancelButton:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -8, 8)
                     cancelButton:SetScript("OnClick", function()
                         ZugZug.UI.confirmCloseListingId = nil
-                        ZugZug_UI_ShowTab("lfg")
+                        ZugZug_UI_ForceRebuildTab("lfg")
                     end)
                 else
                     local closeButton = ZugZug_UI_CreateButton(card, nil, "Close", 54, 20)
@@ -2064,7 +2286,7 @@ local function ZugZug_UI_BuildLFG(parent)
                     closeButton.lfgId = id
                     closeButton:SetScript("OnClick", function()
                         ZugZug.UI.confirmCloseListingId = this.lfgId
-                        ZugZug_UI_ShowTab("lfg")
+                        ZugZug_UI_ForceRebuildTab("lfg")
                     end)
                 end
             elseif isMember then
@@ -2130,7 +2352,7 @@ local function ZugZug_UI_BuildLFG(parent)
                     joinButton.lfgId = id
                     joinButton:SetScript("OnClick", function()
                         ZugZug.UI.selectedJoinListingId = this.lfgId
-                        ZugZug_UI_ShowTab("lfg")
+                        ZugZug_UI_ForceRebuildTab("lfg")
                     end)
                 end
             end
@@ -2141,14 +2363,273 @@ local function ZugZug_UI_BuildLFG(parent)
 end
 
 local function ZugZug_UI_BuildAuctionHouse(parent)
+    parent.refs = parent.refs or {}
+
     local title = ZugZug_UI_CreateText(parent, nil, "WoWAuctions Search", "large")
     title:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
 
-    local body = ZugZug_UI_CreateText(parent, nil, "Auction House search will go here.", "normal")
-    body:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -16)
+    local historyNote = ZugZug_UI_CreateText(parent, nil, "|cff777777Visit |r|cffffffffWoWAuctions.com|r|cff777777 for historical data|r", "small")
+    historyNote:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, -3)
+
+    local sourceNote = ZugZug_UI_CreateText(parent, nil, "|cffff4040Results are from old Ambershire AH. Capy coming soon!|r", "small")
+    sourceNote:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -22)
+
+    local inputFrame, searchEdit = ZugZug_UI_CreateCleanEditBox(parent, 438, 24, "")
+    inputFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -44)
+    searchEdit:SetMaxLetters(80)
+    parent.refs.searchEdit = searchEdit
+    if ZugZug_AH_SetActiveEdit then
+        ZugZug_AH_SetActiveEdit(searchEdit)
+    end
+
+    local function clearSearchFocus()
+        if searchEdit and searchEdit.ClearFocus then
+            searchEdit:ClearFocus()
+        end
+    end
+
+    parent:EnableMouse(true)
+    parent:SetScript("OnMouseDown", clearSearchFocus)
+
+    searchEdit:SetScript("OnEditFocusGained", function()
+        if ZugZug_AH_SetFocusedEdit then
+            ZugZug_AH_SetFocusedEdit(this)
+        end
+    end)
+
+    searchEdit:SetScript("OnEditFocusLost", function()
+        if ZugZug_AH_SetFocusedEdit then
+            ZugZug_AH_SetFocusedEdit(nil)
+        end
+    end)
+
+    searchEdit:SetScript("OnTextChanged", function()
+        if this.ahSettingText then return end
+        this.ahItemLink = nil
+        this.ahItemId = nil
+    end)
+
+    local searchButton = ZugZug_UI_CreateButton(parent, nil, "Search", 80, 24)
+    searchButton:SetPoint("LEFT", inputFrame, "RIGHT", 8, 0)
+    searchButton:SetScript("OnMouseDown", clearSearchFocus)
+
+    local clearButton = ZugZug_UI_CreateButton(parent, nil, "Clear Results", 100, 24)
+    clearButton:SetPoint("LEFT", searchButton, "RIGHT", 8, 0)
+    clearButton:SetScript("OnMouseDown", clearSearchFocus)
+    clearButton:SetScript("OnClick", function()
+        if ZugZug_AH_ClearResults then
+            ZugZug_AH_ClearResults()
+        end
+        ZugZug_UI_ShowTab("auction")
+    end)
+
+    local function doSearch()
+        local query = ZugZug_NormalizeString(searchEdit:GetText() or "")
+        if not query then return end
+
+        if ZugZug_AH_SendSearch and ZugZug_AH_SendSearch(query, searchEdit.ahItemLink or "") then
+            searchEdit:SetText("")
+            searchEdit.ahItemLink = nil
+            searchEdit.ahItemId = nil
+            searchEdit:ClearFocus()
+        end
+    end
+
+    searchEdit:SetScript("OnEnterPressed", doSearch)
+    searchButton:SetScript("OnClick", doSearch)
+
+    local onlyMine = false
+    if ZugZug_AH_GetOnlyMine then
+        onlyMine = ZugZug_AH_GetOnlyMine()
+    end
+
+    local onlyMineCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    onlyMineCheck:SetWidth(22)
+    onlyMineCheck:SetHeight(22)
+    onlyMineCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -76)
+    onlyMineCheck:SetScript("OnMouseDown", clearSearchFocus)
+
+    if onlyMine then
+        onlyMineCheck:SetChecked(1)
+    else
+        onlyMineCheck:SetChecked(nil)
+    end
+
+    onlyMineCheck:SetScript("OnClick", function()
+        if ZugZug_AH_SetOnlyMine then
+            ZugZug_AH_SetOnlyMine(this:GetChecked())
+        end
+
+        ZugZug_UI_ShowTab("auction")
+    end)
+
+    local onlyMineText = ZugZug_UI_CreateText(parent, nil, "Only show my Searches", "small")
+    onlyMineText:SetPoint("LEFT", onlyMineCheck, "RIGHT", -2, 1)
+
+    local header = ZugZug_UI_CreateText(parent, nil, "|cffaaaaaaRecent guild searches|r", "small")
+    header:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -104)
+
+    local scrollFrame = CreateFrame("ScrollFrame", nil, parent)
+    scrollFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -124)
+    scrollFrame:SetWidth(634)
+    scrollFrame:SetHeight(240)
+    scrollFrame:EnableMouse(true)
+    scrollFrame:EnableMouseWheel(true)
+    scrollFrame:SetScript("OnMouseDown", clearSearchFocus)
+    parent.refs.scrollFrame = scrollFrame
+
+    local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+    scrollChild:SetWidth(634)
+    scrollChild:EnableMouse(true)
+    scrollChild:SetScript("OnMouseDown", clearSearchFocus)
+    scrollFrame:SetScrollChild(scrollChild)
+    parent.refs.scrollChild = scrollChild
+
+    scrollFrame:SetScript("OnMouseWheel", function()
+        local current = this:GetVerticalScroll()
+        local maxScroll = this:GetVerticalScrollRange()
+
+        if not current then current = 0 end
+        if not maxScroll then maxScroll = 0 end
+
+        if arg1 and arg1 > 0 then
+            current = current - 48
+            if current < 0 then current = 0 end
+        else
+            current = current + 48
+            if current > maxScroll then current = maxScroll end
+        end
+
+        this:SetVerticalScroll(current)
+    end)
+
+    local rows = {}
+    local sourceRows = {}
+    if ZugZug_AH_GetSearchLog then
+        sourceRows = ZugZug_AH_GetSearchLog()
+    end
+
+    local player = UnitName("player") or ""
+    local visibleCount = 0
+    local i = 1
+    while sourceRows and i <= table.getn(sourceRows) do
+        local row = sourceRows[i]
+        if row then
+            if not onlyMine or string.lower(row.requester or "") == string.lower(player) then
+                visibleCount = visibleCount + 1
+                rows[visibleCount] = row
+            end
+        end
+        i = i + 1
+    end
+
+    local cardWidth = 307
+    local cardHeight = 88
+    local cardGap = 12
+    local rowHeight = 96
+    local gridRows = math.floor((visibleCount + 1) / 2)
+    local childHeight = gridRows * rowHeight
+    if childHeight < 241 then childHeight = 241 end
+    scrollChild:SetHeight(childHeight)
+
+    if visibleCount == 0 then
+        local empty = ZugZug_UI_CreateText(scrollChild, nil, "|cff777777No AH searches yet.|r", "normal")
+        empty:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, 0)
+        return
+    end
+
+    local y = 0
+    i = 1
+    while i <= visibleCount do
+        local row = rows[i]
+        local gridRow = math.floor((i - 1) / 2)
+        local col = (i - 1) - (gridRow * 2)
+        local x = col * (cardWidth + cardGap)
+        y = 0 - (gridRow * rowHeight)
+
+        local card = ZugZug_UI_CreateCard(scrollChild, cardWidth, cardHeight)
+        card:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", x, y)
+        card:EnableMouse(true)
+        card:SetScript("OnMouseDown", clearSearchFocus)
+
+        local iconButton = CreateFrame("Button", nil, card)
+        iconButton:SetWidth(32)
+        iconButton:SetHeight(32)
+        iconButton:SetPoint("TOPLEFT", card, "TOPLEFT", 8, -8)
+        iconButton.itemLink = row.itemLink
+        iconButton:SetScript("OnMouseDown", clearSearchFocus)
+
+        local icon = iconButton:CreateTexture(nil, "ARTWORK")
+        icon:SetAllPoints(iconButton)
+        local localIcon = ""
+        if ZugZug_AH_GetLocalIcon then
+            localIcon = ZugZug_AH_GetLocalIcon(row)
+        end
+        icon:SetTexture((localIcon and localIcon ~= "" and localIcon) or "Interface\\Icons\\INV_Misc_QuestionMark")
+
+        iconButton:SetScript("OnEnter", function()
+            GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+            if this.itemLink and this.itemLink ~= "" and GameTooltip.SetHyperlink then
+                GameTooltip:SetHyperlink(this.itemLink)
+            else
+                GameTooltip:SetText("Auction search")
+            end
+            GameTooltip:Show()
+        end)
+
+        iconButton:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
+
+        local displayName = row.itemName
+        if not displayName or displayName == "" then
+            displayName = row.query or "Unknown item"
+        end
+
+        local countText = tostring(row.auctionCount or 0)
+        local nameText = "|cffffffff" .. displayName .. "|r"
+
+        local qtyText = ZugZug_UI_CreateText(card, nil, "|cffaaaaaaQty:|r |cffffffff" .. countText .. "|r", "small")
+        qtyText:SetPoint("TOPRIGHT", card, "TOPRIGHT", -10, -10)
+
+        local nameButton = CreateFrame("Button", nil, card)
+        nameButton:SetWidth(188)
+        nameButton:SetHeight(18)
+        nameButton:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -8)
+        nameButton.itemLink = row.itemLink
+        nameButton:SetScript("OnMouseDown", clearSearchFocus)
+
+        local nameFont = ZugZug_UI_CreateText(nameButton, nil, nameText, "normal")
+        nameFont:SetAllPoints(nameButton)
+
+        nameButton:SetScript("OnEnter", function()
+            if this.itemLink and this.itemLink ~= "" and GameTooltip.SetHyperlink then
+                GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+                GameTooltip:SetHyperlink(this.itemLink)
+                GameTooltip:Show()
+            end
+        end)
+
+        nameButton:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
+
+        local minText = ZugZug_UI_CreateText(card, nil, "|cffaaaaaaMin Buyout:|r " .. ZugZug_AH_FormatCopper(row.minBuyout or 0), "small")
+        minText:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -28)
+
+        local avgText = ZugZug_UI_CreateText(card, nil, "|cffaaaaaaAvg Buyout:|r " .. ZugZug_AH_FormatCopper(row.avgBuyout or 0), "small")
+        avgText:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -44)
+
+        local meta = ZugZug_UI_CreateText(card, nil, "|cff777777" .. ZugZug_AH_TimeAgo(row.searchedAt) .. " by|r " .. ZugZug_ClassColorize(row.requester or "?"), "small")
+        meta:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -62)
+
+        i = i + 1
+    end
 end
 
 local function ZugZug_UI_BuildGuild(parent)
+    parent.refs = parent.refs or {}
+
     local title = ZugZug_UI_CreateText(parent, nil, "Online Members", "large")
     title:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
 
@@ -2191,6 +2672,7 @@ local function ZugZug_UI_BuildGuild(parent)
 
     local summary = ZugZug_UI_CreateText(parent, nil, summaryText, "normal")
     summary:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, 0)
+    parent.refs.summary = summary
 
     local zoneCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     zoneCheck:SetWidth(20)
@@ -2233,9 +2715,11 @@ local function ZugZug_UI_BuildGuild(parent)
     scrollFrame:SetWidth(634)
     scrollFrame:SetHeight(290)
     scrollFrame:EnableMouseWheel(true)
+    parent.refs.scrollFrame = scrollFrame
 
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
     scrollChild:SetWidth(634)
+    parent.refs.scrollChild = scrollChild
 
     local rowHeight = 18
     local visibleHeight = 290
@@ -2352,11 +2836,72 @@ local function ZugZug_UI_BuildSettings(parent)
         savedRole = ZugZug_GetSavedLFGRole(UnitName("player")) or "DPS"
     end
 
+    local lfgTitle = ZugZug_UI_CreateText(parent, nil, "LFG", "normal")
+    lfgTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -34)
+
+    local lfgNotifications = true
+    if ZugZug_GetEnableLFGNotifications then
+        lfgNotifications = ZugZug_GetEnableLFGNotifications()
+    end
+
+    local lfgNotifyCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    lfgNotifyCheck:SetWidth(24)
+    lfgNotifyCheck:SetHeight(24)
+    lfgNotifyCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX - 4, -52)
+
+    if lfgNotifications then
+        lfgNotifyCheck:SetChecked(1)
+    else
+        lfgNotifyCheck:SetChecked(nil)
+    end
+
+    lfgNotifyCheck:SetScript("OnClick", function()
+        if this:GetChecked() then
+            ZugZug_SetEnableLFGNotifications(true)
+        else
+            ZugZug_SetEnableLFGNotifications(false)
+        end
+
+        ZugZug_UI_ShowTab("settings")
+    end)
+
+    local lfgNotifyText = ZugZug_UI_CreateText(parent, nil, "Enable LFG Chat Notifications", "normal")
+    lfgNotifyText:SetPoint("LEFT", lfgNotifyCheck, "RIGHT", 0, 1)
+
+    local capyMainChat = false
+    if ZugZug_GetShowCapyChatInMainChat then
+        capyMainChat = ZugZug_GetShowCapyChatInMainChat()
+    end
+
+    local capyMainChatCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    capyMainChatCheck:SetWidth(24)
+    capyMainChatCheck:SetHeight(24)
+    capyMainChatCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX - 4, -76)
+
+    if capyMainChat then
+        capyMainChatCheck:SetChecked(1)
+    else
+        capyMainChatCheck:SetChecked(nil)
+    end
+
+    capyMainChatCheck:SetScript("OnClick", function()
+        if this:GetChecked() then
+            ZugZug_SetShowCapyChatInMainChat(true)
+        else
+            ZugZug_SetShowCapyChatInMainChat(false)
+        end
+
+        ZugZug_UI_ShowTab("settings")
+    end)
+
+    local capyMainChatText = ZugZug_UI_CreateText(parent, nil, "Show #capy-chat in main chatbox", "normal")
+    capyMainChatText:SetPoint("LEFT", capyMainChatCheck, "RIGHT", 0, 1)
+
     local roleTitle = ZugZug_UI_CreateText(parent, nil, "Preferred Role", "normal")
-    roleTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -34)
+    roleTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -116)
 
     local tankButton = ZugZug_UI_CreateRoleChoiceButton(parent, "TANK", savedRole == "TANK", 82, 24)
-    tankButton:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -56)
+    tankButton:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -138)
     tankButton:SetScript("OnClick", function()
         if ZugZug_LFG_SetCreateRole then
             ZugZug_LFG_SetCreateRole("TANK")
@@ -2390,38 +2935,6 @@ local function ZugZug_UI_BuildSettings(parent)
 
         ZugZug_UI_ShowTab("settings")
     end)
-
-    local lfgTitle = ZugZug_UI_CreateText(parent, nil, "LFG", "normal")
-    lfgTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -96)
-
-    local lfgNotifications = true
-    if ZugZug_GetEnableLFGNotifications then
-        lfgNotifications = ZugZug_GetEnableLFGNotifications()
-    end
-
-    local lfgNotifyCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    lfgNotifyCheck:SetWidth(24)
-    lfgNotifyCheck:SetHeight(24)
-    lfgNotifyCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX - 4, -114)
-
-    if lfgNotifications then
-        lfgNotifyCheck:SetChecked(1)
-    else
-        lfgNotifyCheck:SetChecked(nil)
-    end
-
-    lfgNotifyCheck:SetScript("OnClick", function()
-        if this:GetChecked() then
-            ZugZug_SetEnableLFGNotifications(true)
-        else
-            ZugZug_SetEnableLFGNotifications(false)
-        end
-
-        ZugZug_UI_ShowTab("settings")
-    end)
-
-    local lfgNotifyText = ZugZug_UI_CreateText(parent, nil, "Enable LFG Notifications", "normal")
-    lfgNotifyText:SetPoint("LEFT", lfgNotifyCheck, "RIGHT", 0, 1)
 
     local loginTitle = ZugZug_UI_CreateText(parent, nil, "Startup", "normal")
     loginTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", rightX, -34)
@@ -2747,6 +3260,110 @@ local function ZugZug_UI_BuildOfficer(parent)
 end
 
 
+local function ZugZug_UI_SetScrollClamped(scrollFrame, scrollValue)
+    if not scrollFrame or not scrollFrame.SetVerticalScroll then return end
+
+    local value = tonumber(scrollValue or 0) or 0
+    local maxScroll = 0
+
+    if scrollFrame.GetVerticalScrollRange then
+        maxScroll = scrollFrame:GetVerticalScrollRange() or 0
+    end
+
+    if value > maxScroll then value = maxScroll end
+    if value < 0 then value = 0 end
+
+    scrollFrame:SetVerticalScroll(value)
+end
+
+local function ZugZug_UI_RestoreScrollNextFrame(scrollFrame, scrollValue)
+    if not scrollFrame or not scrollFrame.SetVerticalScroll then return end
+
+    local restoreFrame = CreateFrame("Frame")
+    restoreFrame:SetScript("OnUpdate", function()
+        this:SetScript("OnUpdate", nil)
+        ZugZug_UI_SetScrollClamped(scrollFrame, scrollValue)
+    end)
+end
+
+local function ZugZug_UI_RebuildTabPreservingScroll(key, page)
+    local scrollValue = 0
+    if page and page.refs and page.refs.scrollFrame and page.refs.scrollFrame.GetVerticalScroll then
+        scrollValue = page.refs.scrollFrame:GetVerticalScroll() or 0
+    end
+
+    ZugZug_UI_ShowTab(key, true)
+
+    local nextPage = ZugZug.UI and ZugZug.UI.pages and ZugZug.UI.pages[key]
+    if nextPage and nextPage.refs and nextPage.refs.scrollFrame then
+        ZugZug_UI_SetScrollClamped(nextPage.refs.scrollFrame, scrollValue)
+        ZugZug_UI_RestoreScrollNextFrame(nextPage.refs.scrollFrame, scrollValue)
+    end
+end
+
+local function ZugZug_UI_UpdateGuild(parent, reason)
+    ZugZug_UI_RebuildTabPreservingScroll("guild", parent)
+end
+
+local function ZugZug_UI_UpdateLFG(parent, reason)
+    ZugZug_UI_RebuildTabPreservingScroll("lfg", parent)
+end
+
+local function ZugZug_UI_UpdateAuction(parent, reason)
+    local text = ""
+    local itemLink = nil
+    local itemId = nil
+    local hadFocus = false
+    local scrollValue = 0
+
+    if parent and parent.refs then
+        local edit = parent.refs.searchEdit
+        if edit then
+            text = edit:GetText() or ""
+            itemLink = edit.ahItemLink
+            itemId = edit.ahItemId
+            if edit.HasFocus and edit:HasFocus() then
+                hadFocus = true
+            end
+        end
+
+        if parent.refs.scrollFrame and parent.refs.scrollFrame.GetVerticalScroll then
+            scrollValue = parent.refs.scrollFrame:GetVerticalScroll() or 0
+        end
+    end
+
+    ZugZug_UI_ShowTab("auction", true)
+
+    local nextPage = ZugZug.UI and ZugZug.UI.pages and ZugZug.UI.pages.auction
+    if nextPage and nextPage.refs then
+        local edit = nextPage.refs.searchEdit
+        if edit then
+            edit.ahSettingText = true
+            edit:SetText(text or "")
+            edit.ahSettingText = nil
+            edit.ahItemLink = itemLink
+            edit.ahItemId = itemId
+            if hadFocus then
+                edit:SetFocus()
+            end
+        end
+
+        local scrollFrame = nextPage.refs.scrollFrame
+        if scrollFrame then
+            ZugZug_UI_SetScrollClamped(scrollFrame, scrollValue)
+            ZugZug_UI_RestoreScrollNextFrame(scrollFrame, scrollValue)
+        end
+    end
+end
+
+local function ZugZug_UI_UpdateOfficer(parent, reason)
+    ZugZug_UI_RebuildTabPreservingScroll("officer", parent)
+end
+
+local function ZugZug_UI_UpdateSettings(parent, reason)
+    ZugZug_UI_ShowTab("settings", true)
+end
+
 local function ZugZug_UI_DegToRad(deg)
     return deg * 0.017453292519943 -- Thank fuck https://www.unitjuggler.com/convert-angle-from-deg-to-rad.html
 end
@@ -2790,15 +3407,9 @@ local function ZugZug_UI_UpdateMinimapButtonPosition()
 end
 
 function ZugZug_UI_CreateMinimapButton()
-    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
-        if ZugZug.UI and ZugZug.UI.minimapButton then
-            ZugZug.UI.minimapButton:Hide()
-        end
-        return
-    end
-
     if ZugZug.UI.minimapButton then
         ZugZug.UI.minimapButton:Show()
+        ZugZug_UI_UpdateMinimapButtonPosition()
         return
     end
 
@@ -2842,8 +3453,12 @@ function ZugZug_UI_CreateMinimapButton()
     button:SetScript("OnEnter", function()
         GameTooltip:SetOwner(this, "ANCHOR_LEFT")
         GameTooltip:SetText("|cff00ff00Zug Zug|r |cffffffffv" .. ZugZug.VERSION .. "|r")
-        GameTooltip:AddLine("Left click: Toggle UI", 1, 1, 1)
-        GameTooltip:AddLine("Right click: Settings", 1, 1, 1)
+        if ZugZug_IsGuildAllowed and ZugZug_IsGuildAllowed() then
+            GameTooltip:AddLine("Left click: Toggle UI", 1, 1, 1)
+            GameTooltip:AddLine("Right click: Settings", 1, 1, 1)
+        else
+            GameTooltip:AddLine("<" .. ZugZug.GUILD_NAME .. "> guild members only", 0.7, 0.7, 0.7)
+        end
         GameTooltip:Show()
     end)
 
@@ -2880,6 +3495,7 @@ function ZugZug_UI_CreateMinimapButton()
 
     ZugZug.UI.minimapButton = button
     ZugZug_UI_UpdateMinimapButtonPosition()
+    button:Show()
 end
 
 function ZugZug_UI_RegisterDefaultTabs()
@@ -2887,15 +3503,21 @@ function ZugZug_UI_RegisterDefaultTabs()
     if ZugZug.UI.defaultTabsRegistered then return end
 
     ZugZug_UI_RegisterTab("dashboard", "Dashboard", ZugZug_UI_BuildDashboard)
+    ZugZug_UI_SetTabUpdateFunc("dashboard", ZugZug_UI_UpdateDashboard)
     ZugZug_UI_RegisterTab("guild", "Roster", ZugZug_UI_BuildGuild)
+    ZugZug_UI_SetTabUpdateFunc("guild", ZugZug_UI_UpdateGuild)
     ZugZug_UI_RegisterTab("lfg", "LFG", ZugZug_UI_BuildLFG)
+    ZugZug_UI_SetTabUpdateFunc("lfg", ZugZug_UI_UpdateLFG)
     ZugZug_UI_RegisterTab("auction", "AH Search", ZugZug_UI_BuildAuctionHouse)
+    ZugZug_UI_SetTabUpdateFunc("auction", ZugZug_UI_UpdateAuction)
 
     if ZugZug_isOfficerOrGM(UnitName("player")) then 
         ZugZug_UI_RegisterTab("officer", "Officer", ZugZug_UI_BuildOfficer)
+        ZugZug_UI_SetTabUpdateFunc("officer", ZugZug_UI_UpdateOfficer)
     end
 
     ZugZug_UI_RegisterTab("settings", "Settings", ZugZug_UI_BuildSettings)
+    ZugZug_UI_SetTabUpdateFunc("settings", ZugZug_UI_UpdateSettings)
 
     ZugZug.UI.defaultTabsRegistered = true
 end

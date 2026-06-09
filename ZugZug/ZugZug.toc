@@ -2,7 +2,7 @@
 ## Title: ZugZug
 ## Notes: Zug Zug Guild Addon for Turtle
 ## Author: Ben / Cows
-## Version: 0.1.1
+## Version: 0.1.2
 ## SavedVariables: ZugZugDB
 
 ZugUtils.lua

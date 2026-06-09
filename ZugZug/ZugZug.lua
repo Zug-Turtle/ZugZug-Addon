@@ -140,10 +140,10 @@ local function ZugZug_OnAddonMessage()
             ZugZug_LFG_SyncToGuild()
         end
         if ZugZug.UI and ZugZug.UI.activeTab == "guild" then
-            if ZugZug_UI_RefreshActiveTabThrottled then
-                ZugZug_UI_RefreshActiveTabThrottled("addon_login", 0.25)
+            if ZugZug_UI_UpdateActiveTabThrottled then
+                ZugZug_UI_UpdateActiveTabThrottled("addon_login", 0.25)
             else
-                ZugZug_UI_ShowTab("guild")
+                ZugZug_UI_UpdateTab("guild", "addon_login")
             end
         end
         return
@@ -153,7 +153,7 @@ local function ZugZug_OnAddonMessage()
         if sender == ZugZug.BOTNAME then
             ZugZug_SetDashboardStateFromPayload(data)
             if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
-                ZugZug_UI_ShowTab("dashboard")
+                ZugZug_UI_UpdateTab("dashboard", "state")
             end
         end
         return
@@ -163,7 +163,7 @@ local function ZugZug_OnAddonMessage()
         if sender == ZugZug.BOTNAME and ZugZug_SetDashboardIdentityFromPayload then
             if ZugZug_SetDashboardIdentityFromPayload(data) then
                 if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
-                    ZugZug_UI_ShowTab("dashboard")
+                    ZugZug_UI_UpdateTab("dashboard", "identity")
                 end
             end
         end
@@ -174,7 +174,7 @@ local function ZugZug_OnAddonMessage()
         if sender == ZugZug.BOTNAME and ZugZug_AddCapyChatFromPayload then
             if ZugZug_AddCapyChatFromPayload(data) then
                 if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
-                    ZugZug_UI_ShowTab("dashboard")
+                    ZugZug_UI_UpdateTab("dashboard", "capy_chat")
                 end
             end
         end
@@ -185,7 +185,18 @@ local function ZugZug_OnAddonMessage()
         if ZugZug_AddCapyChatFromSendPayload then
             if ZugZug_AddCapyChatFromSendPayload(sender, data) then
                 if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
-                    ZugZug_UI_ShowTab("dashboard")
+                    ZugZug_UI_UpdateTab("dashboard", "capy_chat")
+                end
+            end
+        end
+        return
+    end
+
+    if cmd == "AH_SEARCH_RESULT" then
+        if sender == ZugZug.BOTNAME and ZugZug_AH_SetResultFromPayload then
+            if ZugZug_AH_SetResultFromPayload(data) then
+                if ZugZug.UI and ZugZug.UI.activeTab == "auction" then
+                    ZugZug_UI_UpdateTab("auction", "ah_result")
                 end
             end
         end
@@ -206,7 +217,7 @@ local function ZugZug_OnAddonMessage()
         if cmd == "OFC_BANLIST" then
             ZugZug_SetBanlistFromPayload(data)
             if ZugZug.UI and ZugZug.UI.activeTab == "officer" then
-                ZugZug_UI_ShowTab("officer")
+                ZugZug_UI_UpdateTab("officer", "banlist")
             end
             return
         end
@@ -214,7 +225,7 @@ local function ZugZug_OnAddonMessage()
         if cmd == "OFC_NOTICE" then
             ZugZug_Log(ZugZug_SafeDecodeText(data or ""))
             if ZugZug.UI and ZugZug.UI.activeTab == "officer" then
-                ZugZug_UI_ShowTab("officer")
+                ZugZug_UI_UpdateTab("officer", "notice")
             end
             return
         end
@@ -225,10 +236,10 @@ local function ZugZug_OnAddonMessage()
         if ZugZug_LFG_HandleMessage then
             ZugZug_LFG_HandleMessage(cmd, data, sender)
             if ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
-                if ZugZug_UI_RefreshActiveTabThrottled then
-                    ZugZug_UI_RefreshActiveTabThrottled("lfg_dashboard", 0.25)
+                if ZugZug_UI_UpdateActiveTabThrottled then
+                    ZugZug_UI_UpdateActiveTabThrottled("lfg_dashboard", 0.25)
                 else
-                    ZugZug_UI_ShowTab("dashboard")
+                    ZugZug_UI_UpdateTab("dashboard", "lfg_dashboard")
                 end
             end
         end
@@ -245,12 +256,12 @@ local function ZugZug_RefreshDashboardMOTD(throttleReason)
     end
 
     if changed and ZugZug.UI and ZugZug.UI.activeTab == "dashboard" then
-        if throttleReason and ZugZug_UI_RefreshActiveTabThrottled then
-            ZugZug_UI_RefreshActiveTabThrottled(throttleReason, 0.25)
-        elseif ZugZug_UI_RefreshActiveTab then
-            ZugZug_UI_RefreshActiveTab()
+        if throttleReason and ZugZug_UI_UpdateActiveTabThrottled then
+            ZugZug_UI_UpdateActiveTabThrottled(throttleReason, 0.25)
+        elseif ZugZug_UI_UpdateActiveTab then
+            ZugZug_UI_UpdateActiveTab("motd")
         else
-            ZugZug_UI_ShowTab("dashboard")
+            ZugZug_UI_UpdateTab("dashboard", "motd")
         end
     end
 
@@ -275,6 +286,10 @@ local function ZugZug_RunGuildStartup()
 
     ZugZug_UI_RegisterDefaultTabs()
     ZugZug_UI_CreateMinimapButton()
+    if ZugZug_AH_HookTooltips then
+        ZugZug_AH_HookTooltips()
+    end
+
     ZugZug_RefreshDashboardMOTD()
     ZugZug_LFG_StartTicker()
 
@@ -313,9 +328,16 @@ pcall(function()
     zug:RegisterEvent("GUILD_MOTD")
 end)
 
+if ZugZug_UI_CreateMinimapButton then
+    ZugZug_UI_CreateMinimapButton()
+end
+
 zug:SetScript("OnEvent", function()
     if event == "VARIABLES_LOADED" then
         ZugZug_InitDB()
+        if ZugZug_UI_CreateMinimapButton then
+            ZugZug_UI_CreateMinimapButton()
+        end
     elseif event == "PLAYER_GUILD_UPDATE" then
         if not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
             if ZugZug_DisableForNonGuild then
@@ -348,8 +370,8 @@ zug:SetScript("OnEvent", function()
             ZugZug_LFG_PruneOffline()
         end
 
-        if ZugZug_UI_RefreshActiveTabThrottled then
-            ZugZug_UI_RefreshActiveTabThrottled("guild_roster", 0.25)
+        if ZugZug_UI_UpdateActiveTabThrottled then
+            ZugZug_UI_UpdateActiveTabThrottled("guild_roster", 0.25)
         end
     elseif event == "PLAYER_LOGIN" then
         ZugZug_Wait(1, function()
@@ -379,9 +401,9 @@ zug:SetScript("OnEvent", function()
         if sender and msg then
             ZugZug_AddOfficerChatLog(sender, msg)
 
-            if ZugZug.UI and ZugZug.UI.activeTab == "officer" then
-                ZugZug_UI_ShowTab("officer")
-            end
+        if ZugZug.UI and ZugZug.UI.activeTab == "officer" then
+                ZugZug_UI_UpdateTab("officer", "officer_chat")
+        end
         end
     elseif event == "PARTY_INVITE_REQUEST" then
         if not ZugZug_IsReadyGuildMember() then return end
@@ -396,10 +418,10 @@ zug:SetScript("OnEvent", function()
     elseif event == "ZONE_CHANGED" or event == "ZONE_CHANGED_NEW_AREA" or event == "ZONE_CHANGED_INDOORS" then
         if not ZugZug_IsReadyGuildMember() then return end
         if ZugZug.UI and ZugZug.UI.activeTab == "guild" then
-            if ZugZug_UI_RefreshActiveTabThrottled then
-                ZugZug_UI_RefreshActiveTabThrottled("zone_changed", 0.25)
+            if ZugZug_UI_UpdateActiveTabThrottled then
+                ZugZug_UI_UpdateActiveTabThrottled("zone_changed", 0.25)
             else
-                ZugZug_UI_ShowTab("guild")
+                ZugZug_UI_UpdateTab("guild", "zone_changed")
             end
         end
     end
