@@ -9,6 +9,14 @@ local ZUG_UI_WIDTH = 670
 local ZUG_UI_HEIGHT = 460
 local ZUG_UI_TAB_WIDTH = 80
 local ZUG_UI_TAB_HEIGHT = 24
+local ZUG_UI_TAB_ORDER = {
+    dashboard = 10,
+    guild = 20,
+    lfg = 30,
+    auction = 40,
+    officer = 50,
+    settings = 60,
+}
 
 local function ZugZug_UI_ClearPage(page)
     if not page then return end
@@ -842,6 +850,46 @@ local function ZugZug_UI_GetTabWidth(label)
     return width
 end
 
+local function ZugZug_UI_GetTabOrder(tab)
+    if not tab then return 999 end
+    if tab.order then return tab.order end
+    if tab.key and ZUG_UI_TAB_ORDER[tab.key] then
+        return ZUG_UI_TAB_ORDER[tab.key]
+    end
+    return 999
+end
+
+local function ZugZug_UI_SortTabs()
+    if not ZugZug.UI or not ZugZug.UI.tabs then return end
+
+    table.sort(ZugZug.UI.tabs, function(a, b)
+        local aOrder = ZugZug_UI_GetTabOrder(a)
+        local bOrder = ZugZug_UI_GetTabOrder(b)
+
+        if aOrder ~= bOrder then
+            return aOrder < bOrder
+        end
+
+        local aLabel = ""
+        local bLabel = ""
+
+        if a and a.label then aLabel = string.lower(a.label) end
+        if b and b.label then bLabel = string.lower(b.label) end
+
+        if aLabel ~= bLabel then
+            return aLabel < bLabel
+        end
+
+        local aKey = ""
+        local bKey = ""
+
+        if a and a.key then aKey = string.lower(a.key) end
+        if b and b.key then bKey = string.lower(b.key) end
+
+        return aKey < bKey
+    end)
+end
+
 local function ZugZug_UI_LayoutTabs()
     local frame = ZugZug_UI_GetFrame()
     local maxWidth = ZUG_UI_WIDTH - 32
@@ -881,6 +929,7 @@ function ZugZug_UI_RegisterTab(key, label, buildFunc)
     if not key or key == "" then return end
     if not label then label = key end
     if not buildFunc then return end
+    if ZugZug.UI and ZugZug.UI.tabsByKey and ZugZug.UI.tabsByKey[key] then return end
 
     local frame = ZugZug_UI_GetFrame()
     local tabIndex = table.getn(ZugZug.UI.tabs) + 1
@@ -891,6 +940,7 @@ function ZugZug_UI_RegisterTab(key, label, buildFunc)
 
     tab.key = key
     tab.label = label
+    tab.order = ZUG_UI_TAB_ORDER[key] or 999
     tab.page = page
     tab.buildFunc = buildFunc
     tab.updateFunc = nil
@@ -903,7 +953,51 @@ function ZugZug_UI_RegisterTab(key, label, buildFunc)
     ZugZug.UI.tabs[tabIndex] = tab
     ZugZug.UI.tabsByKey[key] = tab
     ZugZug.UI.pages[key] = page
+    ZugZug_UI_SortTabs()
     ZugZug_UI_LayoutTabs()
+end
+
+function ZugZug_UI_UnregisterTab(key)
+    if not key or key == "" then return end
+    if not ZugZug.UI or not ZugZug.UI.tabs then return end
+
+    local removed = nil
+    local writeIndex = 1
+    local count = table.getn(ZugZug.UI.tabs)
+    local i = 1
+
+    while i <= count do
+        local tab = ZugZug.UI.tabs[i]
+        if tab and tab.key == key then
+            removed = tab
+            if tab.page then
+                tab.page:Hide()
+                tab.page:SetParent(nil)
+            end
+            tab:Hide()
+            tab:SetParent(nil)
+        elseif tab then
+            ZugZug.UI.tabs[writeIndex] = tab
+            writeIndex = writeIndex + 1
+        end
+        i = i + 1
+    end
+
+    while ZugZug.UI.tabs[writeIndex] do
+        ZugZug.UI.tabs[writeIndex] = nil
+        writeIndex = writeIndex + 1
+    end
+
+    if removed then
+        ZugZug.UI.tabsByKey[key] = nil
+        ZugZug.UI.pages[key] = nil
+        if ZugZug.UI.activeTab == key then
+            ZugZug.UI.activeTab = nil
+            ZugZug_UI_ShowTab("dashboard")
+        end
+        ZugZug_UI_SortTabs()
+        ZugZug_UI_LayoutTabs()
+    end
 end
 
 function ZugZug_UI_SetTabUpdateFunc(key, updateFunc)
@@ -1154,6 +1248,9 @@ local function ZugZug_UI_CreateCapyChatPanel(parent, width, height)
     local title = ZugZug_UI_CreateText(panel, nil, "|cff69ccf0Discord #capy-chat|r", "normal")
     title:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -8)
 
+    local clearButton = ZugZug_UI_CreateButton(panel, nil, "Clear", 48, 20)
+    clearButton:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -10, -6)
+
     local chatFrame = CreateFrame("ScrollingMessageFrame", nil, panel)
     chatFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -34)
     chatFrame:SetWidth(width - 20)
@@ -1197,6 +1294,16 @@ local function ZugZug_UI_CreateCapyChatPanel(parent, width, height)
     local sendButton = ZugZug_UI_CreateButton(panel, nil, "Send", 54, 24)
     sendButton:SetPoint("LEFT", inputFrame, "RIGHT", 6, 0)
     sendButton:SetScript("OnMouseDown", clearCapyChatFocus)
+
+    clearButton:SetScript("OnMouseDown", clearCapyChatFocus)
+    clearButton:SetScript("OnClick", function()
+        if ZugZug_ClearCapyChatLog then
+            ZugZug_ClearCapyChatLog()
+        end
+        if panel.chatFrame then
+            ZugZug_UI_SetChatMessages(panel.chatFrame, ZugZug.capyChatLog or {}, "cffd6e7ff")
+        end
+    end)
 
     local function sendMessage()
         local text = input:GetText() or ""
@@ -2371,11 +2478,8 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
     local historyNote = ZugZug_UI_CreateText(parent, nil, "|cff777777Visit |r|cffffffffWoWAuctions.com|r|cff777777 for historical data|r", "small")
     historyNote:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, -3)
 
-    local sourceNote = ZugZug_UI_CreateText(parent, nil, "|cffff4040Results are from old Ambershire AH. Capy coming soon!|r", "small")
-    sourceNote:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -22)
-
     local inputFrame, searchEdit = ZugZug_UI_CreateCleanEditBox(parent, 438, 24, "")
-    inputFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -44)
+    inputFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -34)
     searchEdit:SetMaxLetters(80)
     parent.refs.searchEdit = searchEdit
     if ZugZug_AH_SetActiveEdit then
@@ -2446,7 +2550,7 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
     local onlyMineCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     onlyMineCheck:SetWidth(22)
     onlyMineCheck:SetHeight(22)
-    onlyMineCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -76)
+    onlyMineCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -66)
     onlyMineCheck:SetScript("OnMouseDown", clearSearchFocus)
 
     if onlyMine then
@@ -2467,10 +2571,10 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
     onlyMineText:SetPoint("LEFT", onlyMineCheck, "RIGHT", -2, 1)
 
     local header = ZugZug_UI_CreateText(parent, nil, "|cffaaaaaaRecent guild searches|r", "small")
-    header:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -104)
+    header:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -94)
 
     local scrollFrame = CreateFrame("ScrollFrame", nil, parent)
-    scrollFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -124)
+    scrollFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -114)
     scrollFrame:SetWidth(634)
     scrollFrame:SetHeight(240)
     scrollFrame:EnableMouse(true)
@@ -2627,6 +2731,64 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
     end
 end
 
+local function ZugZug_UI_GetLevelDifficultyColor(level)
+    local targetLevel = tonumber(level)
+    local playerLevel = 0
+
+    if UnitLevel then
+        playerLevel = tonumber(UnitLevel("player")) or 0
+    end
+
+    if not targetLevel or targetLevel <= 0 or playerLevel <= 0 then
+        return "ffffffff"
+    end
+
+    if targetLevel <= playerLevel - 8 then
+        return "ff9d9d9d"
+    elseif targetLevel <= playerLevel - 3 then
+        return "ff1eff00"
+    elseif targetLevel <= playerLevel + 2 then
+        return "ffffff00"
+    elseif targetLevel <= playerLevel + 4 then
+        return "ffff7f00"
+    end
+
+    return "ffff0000"
+end
+
+local function ZugZug_UI_GetPlayerLevelRange()
+    local playerLevel = 0
+
+    if UnitLevel then
+        playerLevel = tonumber(UnitLevel("player")) or 0
+    end
+
+    if playerLevel <= 0 then
+        return nil, nil
+    end
+
+    local minLevel = playerLevel - 3
+    local maxLevel = playerLevel + 3
+
+    if minLevel < 1 then minLevel = 1 end
+    if maxLevel > 60 then maxLevel = 60 end
+
+    return minLevel, maxLevel
+end
+
+local function ZugZug_UI_IsMemberWithinPlayerLevel(member)
+    if not member then return false end
+
+    local memberLevel = tonumber(member.level)
+    local minLevel, maxLevel = ZugZug_UI_GetPlayerLevelRange()
+
+    if not memberLevel or not minLevel or not maxLevel then
+        return false
+    end
+
+    return memberLevel >= minLevel and memberLevel <= maxLevel
+end
+
 local function ZugZug_UI_BuildGuild(parent)
     parent.refs = parent.refs or {}
 
@@ -2646,6 +2808,10 @@ local function ZugZug_UI_BuildGuild(parent)
     end
 
     local sameZoneOnly = ZugZug_IsRosterSameZoneOnly()
+    local withinLevelOnly = false
+    if ZugZug_IsRosterWithinMyLevelOnly then
+        withinLevelOnly = ZugZug_IsRosterWithinMyLevelOnly()
+    end
     local playerName = UnitName("player")
 
     local visibleCount = 0
@@ -2660,7 +2826,17 @@ local function ZugZug_UI_BuildGuild(parent)
                 nearbyCount = nearbyCount + 1
             end
 
-            if not sameZoneOnly or member.zone == playerZone then
+            local showMember = true
+
+            if sameZoneOnly and member.zone ~= playerZone then
+                showMember = false
+            end
+
+            if withinLevelOnly and not ZugZug_UI_IsMemberWithinPlayerLevel(member) then
+                showMember = false
+            end
+
+            if showMember then
                 visibleCount = visibleCount + 1
             end
         end
@@ -2674,10 +2850,34 @@ local function ZugZug_UI_BuildGuild(parent)
     summary:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, 0)
     parent.refs.summary = summary
 
+    local levelCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    levelCheck:SetWidth(20)
+    levelCheck:SetHeight(20)
+    levelCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", -4, -20)
+
+    if withinLevelOnly then
+        levelCheck:SetChecked(1)
+    else
+        levelCheck:SetChecked(nil)
+    end
+
+    levelCheck:SetScript("OnClick", function()
+        if this:GetChecked() then
+            ZugZug_SetRosterWithinMyLevelOnly(true)
+        else
+            ZugZug_SetRosterWithinMyLevelOnly(false)
+        end
+
+        ZugZug_UI_ShowTab("guild")
+    end)
+
+    local levelCheckText = ZugZug_UI_CreateText(parent, nil, "Show within my level", "small")
+    levelCheckText:SetPoint("LEFT", levelCheck, "RIGHT", -2, 1)
+
     local zoneCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     zoneCheck:SetWidth(20)
     zoneCheck:SetHeight(20)
-    zoneCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", -4, -20)
+    zoneCheck:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -126, -20)
 
     if sameZoneOnly then
         zoneCheck:SetChecked(1)
@@ -2698,8 +2898,10 @@ local function ZugZug_UI_BuildGuild(parent)
     local zoneCheckText = ZugZug_UI_CreateText(parent, nil, "Only Show Nearby", "small")
     zoneCheckText:SetPoint("LEFT", zoneCheck, "RIGHT", -2, 1)
 
-    -- Columns: Level, Name, Zone
-    local headerLevel = ZugZug_UI_CreateText(parent, nil, "|cffaaaaaaLv|r", "small")
+    -- Columns: Lv., Name, Zone
+    local headerLevel = ZugZug_UI_CreateText(parent, nil, "|cffaaaaaaLv.|r", "small")
+    headerLevel:SetWidth(34)
+    headerLevel:SetJustifyH("RIGHT")
     headerLevel:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -46)
 
     local headerName = ZugZug_UI_CreateText(parent, nil, "|cffaaaaaaName|r", "small")
@@ -2757,8 +2959,12 @@ local function ZugZug_UI_BuildGuild(parent)
 
     if visibleCount == 0 then
         local emptyText = "|cffaaaaaaNo online members cached yet.|r"
-        if sameZoneOnly then
+        if sameZoneOnly and withinLevelOnly then
+            emptyText = "|cffaaaaaaNo online guildies found matching your filters.|r"
+        elseif sameZoneOnly then
             emptyText = "|cffaaaaaaNo online guildies found in your current zone.|r"
+        elseif withinLevelOnly then
+            emptyText = "|cffaaaaaaNo online guildies found within your level range.|r"
         end
 
         local empty = ZugZug_UI_CreateText(scrollChild, nil, emptyText, "normal")
@@ -2779,7 +2985,12 @@ local function ZugZug_UI_BuildGuild(parent)
                 showMember = false
             end
 
+            if withinLevelOnly and not ZugZug_UI_IsMemberWithinPlayerLevel(member) then
+                showMember = false
+            end
+
             if showMember then
+                local level = member.level or ""
                 local coloredName = ZugZug_ClassColorize(member.name)
                 local version = ZugZug_GetAddonVersionForMember(member.name)
 
@@ -2789,13 +3000,14 @@ local function ZugZug_UI_BuildGuild(parent)
                     nameText = nameText .. " |cffffd100(GM)|r"
                 elseif member.rankIndex and member.rankIndex <= 2 then
                     nameText = nameText .. " |cff00ffff(Officer)|r"
+                elseif member.isFriend or (ZugZug_IsFriend and ZugZug_IsFriend(member.name)) then
+                    nameText = nameText .. " |cff00ff00(Friend)|r"
                 end
 
                 if version then
                     nameText = nameText .. " |cff777777v" .. version .. "|r"
                 end
 
-                local level = member.level or ""
                 local zone = member.zone or ""
 
                 local zoneColor = "|cffffffff"
@@ -2803,16 +3015,45 @@ local function ZugZug_UI_BuildGuild(parent)
                     zoneColor = "|cff00ff00"
                 end
 
-                local levelFont = ZugZug_UI_CreateText(scrollChild, nil, tostring(level), "normal")
-                levelFont:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, y)
-
                 local nameFont = ZugZug_UI_CreateText(scrollChild, nil, nameText, "normal")
                 nameFont:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 52, y)
 
+                local hasLocation = false
+                if ZugZug_FindGuildLocation and ZugZug_FindGuildLocation(member.name) then
+                    hasLocation = true
+                end
+
                 local zoneFont = ZugZug_UI_CreateText(scrollChild, nil, zoneColor .. zone .. "|r", "normal")
-                zoneFont:SetWidth(240)
+                zoneFont:SetWidth(220)
                 zoneFont:SetJustifyH("RIGHT")
                 zoneFont:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", -4, y)
+
+                if hasLocation then
+                    local zoneButton = CreateFrame("Button", nil, scrollChild)
+                    zoneButton:SetWidth(220)
+                    zoneButton:SetHeight(rowHeight)
+                    zoneButton:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", -4, y + 1)
+                    zoneButton.memberName = member.name
+                    zoneButton:SetScript("OnClick", function()
+                        if ZugZug_ShowGuildLocation then
+                            ZugZug_ShowGuildLocation(this.memberName)
+                        end
+                    end)
+                    zoneButton:SetScript("OnEnter", function()
+                        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+                        GameTooltip:SetText("View on Map")
+                        GameTooltip:Show()
+                    end)
+                    zoneButton:SetScript("OnLeave", function()
+                        GameTooltip:Hide()
+                    end)
+                end
+
+                local levelColor = ZugZug_UI_GetLevelDifficultyColor(level)
+                local levelFont = ZugZug_UI_CreateText(scrollChild, nil, "|c" .. levelColor .. tostring(level or "") .. "|r", "normal")
+                levelFont:SetWidth(34)
+                levelFont:SetJustifyH("RIGHT")
+                levelFont:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, y)
 
                 y = y - rowHeight
             end
@@ -2868,40 +3109,11 @@ local function ZugZug_UI_BuildSettings(parent)
     local lfgNotifyText = ZugZug_UI_CreateText(parent, nil, "Enable LFG Chat Notifications", "normal")
     lfgNotifyText:SetPoint("LEFT", lfgNotifyCheck, "RIGHT", 0, 1)
 
-    local capyMainChat = false
-    if ZugZug_GetShowCapyChatInMainChat then
-        capyMainChat = ZugZug_GetShowCapyChatInMainChat()
-    end
-
-    local capyMainChatCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    capyMainChatCheck:SetWidth(24)
-    capyMainChatCheck:SetHeight(24)
-    capyMainChatCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX - 4, -76)
-
-    if capyMainChat then
-        capyMainChatCheck:SetChecked(1)
-    else
-        capyMainChatCheck:SetChecked(nil)
-    end
-
-    capyMainChatCheck:SetScript("OnClick", function()
-        if this:GetChecked() then
-            ZugZug_SetShowCapyChatInMainChat(true)
-        else
-            ZugZug_SetShowCapyChatInMainChat(false)
-        end
-
-        ZugZug_UI_ShowTab("settings")
-    end)
-
-    local capyMainChatText = ZugZug_UI_CreateText(parent, nil, "Show #capy-chat in main chatbox", "normal")
-    capyMainChatText:SetPoint("LEFT", capyMainChatCheck, "RIGHT", 0, 1)
-
     local roleTitle = ZugZug_UI_CreateText(parent, nil, "Preferred Role", "normal")
-    roleTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -116)
+    roleTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -84)
 
     local tankButton = ZugZug_UI_CreateRoleChoiceButton(parent, "TANK", savedRole == "TANK", 82, 24)
-    tankButton:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -138)
+    tankButton:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -106)
     tankButton:SetScript("OnClick", function()
         if ZugZug_LFG_SetCreateRole then
             ZugZug_LFG_SetCreateRole("TANK")
@@ -2935,6 +3147,38 @@ local function ZugZug_UI_BuildSettings(parent)
 
         ZugZug_UI_ShowTab("settings")
     end)
+
+    local discordTitle = ZugZug_UI_CreateText(parent, nil, "Discord", "normal")
+    discordTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX, -148)
+
+    local capyMainChat = false
+    if ZugZug_GetShowCapyChatInMainChat then
+        capyMainChat = ZugZug_GetShowCapyChatInMainChat()
+    end
+
+    local capyMainChatCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    capyMainChatCheck:SetWidth(24)
+    capyMainChatCheck:SetHeight(24)
+    capyMainChatCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", leftX - 4, -166)
+
+    if capyMainChat then
+        capyMainChatCheck:SetChecked(1)
+    else
+        capyMainChatCheck:SetChecked(nil)
+    end
+
+    capyMainChatCheck:SetScript("OnClick", function()
+        if this:GetChecked() then
+            ZugZug_SetShowCapyChatInMainChat(true)
+        else
+            ZugZug_SetShowCapyChatInMainChat(false)
+        end
+
+        ZugZug_UI_ShowTab("settings")
+    end)
+
+    local capyMainChatText = ZugZug_UI_CreateText(parent, nil, "Show #capy-chat in main chatbox", "normal")
+    capyMainChatText:SetPoint("LEFT", capyMainChatCheck, "RIGHT", 0, 1)
 
     local loginTitle = ZugZug_UI_CreateText(parent, nil, "Startup", "normal")
     loginTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", rightX, -34)
@@ -3364,6 +3608,23 @@ local function ZugZug_UI_UpdateSettings(parent, reason)
     ZugZug_UI_ShowTab("settings", true)
 end
 
+function ZugZug_UI_SetAuctionTabEnabled(enabled)
+    if not ZugZug.UI then return end
+
+    if enabled then
+        ZugZug.ahEnabled = true
+        if not ZugZug.UI.tabsByKey or not ZugZug.UI.tabsByKey.auction then
+            ZugZug_UI_RegisterTab("auction", "AH Search", ZugZug_UI_BuildAuctionHouse)
+            ZugZug_UI_SetTabUpdateFunc("auction", ZugZug_UI_UpdateAuction)
+        end
+    else
+        ZugZug.ahEnabled = false
+        if ZugZug.UI.tabsByKey and ZugZug.UI.tabsByKey.auction then
+            ZugZug_UI_UnregisterTab("auction")
+        end
+    end
+end
+
 local function ZugZug_UI_DegToRad(deg)
     return deg * 0.017453292519943 -- Thank fuck https://www.unitjuggler.com/convert-angle-from-deg-to-rad.html
 end
@@ -3508,8 +3769,9 @@ function ZugZug_UI_RegisterDefaultTabs()
     ZugZug_UI_SetTabUpdateFunc("guild", ZugZug_UI_UpdateGuild)
     ZugZug_UI_RegisterTab("lfg", "LFG", ZugZug_UI_BuildLFG)
     ZugZug_UI_SetTabUpdateFunc("lfg", ZugZug_UI_UpdateLFG)
-    ZugZug_UI_RegisterTab("auction", "AH Search", ZugZug_UI_BuildAuctionHouse)
-    ZugZug_UI_SetTabUpdateFunc("auction", ZugZug_UI_UpdateAuction)
+    if ZugZug.ahEnabled then
+        ZugZug_UI_SetAuctionTabEnabled(true)
+    end
 
     if ZugZug_isOfficerOrGM(UnitName("player")) then 
         ZugZug_UI_RegisterTab("officer", "Officer", ZugZug_UI_BuildOfficer)

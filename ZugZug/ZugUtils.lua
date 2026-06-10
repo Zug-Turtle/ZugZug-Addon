@@ -1,7 +1,7 @@
 ZugZug = {}
 ZugZug.NAME = "ZugZug"
 ZugZug.BOTNAME = "Zugbot"
-ZugZug.VERSION = "0.1.2"
+ZugZug.VERSION = "1.0.0"
 ZugZug.GUILD_NAME = "Zug Zug"
 ZugZug.PREFIX = "ZUGZUG"
 ZugZug.DISCORD = "https://discord.gg/cG27gCEK4c"
@@ -30,17 +30,19 @@ ZugZug.minimapAngle = 225
 ZugZug.incomingChunks = {}
 ZugZug.onlineMembers = {}
 ZugZug.addonUsers = {}
+ZugZug.friendsByName = {}
 
 ZugZug.locationBroadcastInterval = 5
-ZugZug.locationPinUpdateInterval = 0.25
+ZugZug.locationPinUpdateInterval = 0.25 
 ZugZug.locationTimeout = 90
 ZugZug.locationTicker = nil
 ZugZug.locationPins = {}
 ZugZug.ahSearchLog = {}
 ZugZug.ahPriceCacheByItemId = {}
+ZugZug.ahEnabled = false
 
 
-function ZugZug_Log(msg) print("|cff00ff00[ZugZug]|r " .. msg) end
+function ZugZug_Log(msg) print("|cff00ff00[Zug Zug]|r " .. msg) end
 
 function ZugZug_IsGuildAllowed()
     if not IsInGuild or not IsInGuild() then
@@ -121,6 +123,10 @@ function ZugZug_InitDB()
         ZugZugDB.rosterSameZoneOnly = false
     end
 
+    if ZugZugDB.rosterWithinMyLevelOnly == nil then
+        ZugZugDB.rosterWithinMyLevelOnly = false
+    end
+
     if ZugZugDB.showWindowOnLogin == nil then
         ZugZugDB.showWindowOnLogin = false
     end
@@ -160,6 +166,7 @@ function ZugZug_InitDB()
 
     ZugZug.addonUsers = ZugZugDB.addonUsers
     ZugZug.rosterSameZoneOnly = ZugZugDB.rosterSameZoneOnly
+    ZugZug.rosterWithinMyLevelOnly = ZugZugDB.rosterWithinMyLevelOnly
     ZugZug.showWindowOnLogin = ZugZugDB.showWindowOnLogin
     ZugZug.officerChatLog = ZugZugDB.officerChatLog
     ZugZug.banlist = ZugZugDB.banlist
@@ -398,6 +405,14 @@ function ZugZug_AddCapyChatLog(sender, msg, className, source)
         table.remove(ZugZugDB.capyChatLog, 1)
     end
 
+    ZugZug.capyChatLog = ZugZugDB.capyChatLog
+end
+
+function ZugZug_ClearCapyChatLog()
+    if not ZugZugDB then ZugZugDB = {} end
+
+    ZugZugDB.capyChatLog = {}
+    ZugZugDB.capyChatLog.n = 0
     ZugZug.capyChatLog = ZugZugDB.capyChatLog
 end
 
@@ -1715,6 +1730,84 @@ function ZugZug_IsRosterSameZoneOnly()
     return false
 end
 
+function ZugZug_SetRosterWithinMyLevelOnly(enabled)
+    if not ZugZugDB then ZugZugDB = {} end
+    if enabled then
+        ZugZugDB.rosterWithinMyLevelOnly = true
+        ZugZug.rosterWithinMyLevelOnly = true
+    else
+        ZugZugDB.rosterWithinMyLevelOnly = false
+        ZugZug.rosterWithinMyLevelOnly = false
+    end
+end
+
+function ZugZug_IsRosterWithinMyLevelOnly()
+    if ZugZug.rosterWithinMyLevelOnly then return true end
+    return false
+end
+
+function ZugZug_GetNameKey(name)
+    local text = tostring(name or "")
+    local dash = string.find(text, "-", 1, true)
+
+    if dash then
+        text = string.sub(text, 1, dash - 1)
+    end
+
+    text = string.gsub(text, "^%s+", "")
+    text = string.gsub(text, "%s+$", "")
+
+    if text == "" then
+        return nil
+    end
+
+    return string.lower(text)
+end
+
+function ZugZug_UpdateFriendCache(requestRefresh)
+    if not ZugZug.friendsByName then
+        ZugZug.friendsByName = {}
+    else
+        ZugZug_ClearTable(ZugZug.friendsByName)
+    end
+
+    if requestRefresh and ShowFriends then
+        ShowFriends()
+    end
+
+    if not GetNumFriends or not GetFriendInfo then
+        return
+    end
+
+    local friendCount = GetNumFriends() or 0
+    local i = 1
+
+    while i <= friendCount do
+        local name = GetFriendInfo(i)
+        local key = ZugZug_GetNameKey(name)
+
+        if key then
+            ZugZug.friendsByName[key] = true
+        end
+
+        i = i + 1
+    end
+end
+
+function ZugZug_IsFriend(name)
+    if not ZugZug.friendsByName then
+        return false
+    end
+
+    local key = ZugZug_GetNameKey(name)
+
+    if key and ZugZug.friendsByName[key] then
+        return true
+    end
+
+    return false
+end
+
 function ZugZug_SortOnlineMembers()
     if not ZugZug.onlineMembers then return end
 
@@ -1734,6 +1827,14 @@ function ZugZug_SortOnlineMembers()
         if bRank <= 2 then bOfficer = true end
         if aOfficer ~= bOfficer then
             return aOfficer
+        end
+
+        local aFriend = false
+        local bFriend = false
+        if a and a.isFriend then aFriend = true end
+        if b and b.isFriend then bFriend = true end
+        if aFriend ~= bFriend then
+            return aFriend
         end
 
         local aLevel = 0
@@ -1774,6 +1875,10 @@ function ZugZug_UpdateOnlineMembers()
     if not ZugZugDB.classByName then ZugZugDB.classByName = {} end
     ZugZug.classByName = ZugZugDB.classByName
 
+    if ZugZug_UpdateFriendCache then
+        ZugZug_UpdateFriendCache()
+    end
+
     local numMembers = GetNumGuildMembers()
     if not numMembers then return end
 
@@ -1793,6 +1898,7 @@ function ZugZug_UpdateOnlineMembers()
                 rankIndex = rankIndex,
                 level = level,
                 zone = zone,
+                isFriend = ZugZug_IsFriend and ZugZug_IsFriend(name),
             }
             onlineIndex = onlineIndex + 1
         end
@@ -1936,6 +2042,9 @@ function ZugZug_HandleLogin()
             ZugZug_Log("|cff00ffffOfficer|r access granted.")
         end
         ZugZug_BroadcastAddon("LOGIN~" .. ZugZug.VERSION)
+        if ZugZug_StartVersionGossip then
+            ZugZug_StartVersionGossip()
+        end
         if ZugZug_LFG_RequestSync then
             ZugZug_LFG_RequestSync()
         end
@@ -1945,6 +2054,59 @@ function ZugZug_HandleLogin()
         ZugZug_Log("Unfortunately you are not a member of |cff00ff00<" .. ZugZug.GUILD_NAME .. ">|r. Sorry you're lame.")
         return false
     end
+end
+
+function ZugZug_StartVersionGossip()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
+
+    if ZugZug.versionGossipTicker then
+        ZugZug.versionGossipTicker:SetScript("OnUpdate", nil)
+        ZugZug.versionGossipTicker = nil
+    end
+
+    local frame = CreateFrame("Frame")
+    frame.elapsed = 0
+    frame.nextAt = 1
+    frame.sent = 0
+
+    frame:SetScript("OnUpdate", function()
+        if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
+            this:SetScript("OnUpdate", nil)
+            ZugZug.versionGossipTicker = nil
+            return
+        end
+
+        this.elapsed = (this.elapsed or 0) + arg1
+
+        if this.elapsed < (this.nextAt or 1) then
+            return
+        end
+
+        ZugZug_BroadcastAddon("VERSION~" .. ZugZug.VERSION)
+        this.sent = (this.sent or 0) + 1
+
+        if this.sent >= 3 then
+            this:SetScript("OnUpdate", nil)
+            ZugZug.versionGossipTicker = nil
+            return
+        end
+
+        this.nextAt = this.nextAt + 2
+    end)
+
+    ZugZug.versionGossipTicker = frame
+end
+
+function ZugZug_MaybeReplyVersionGossip()
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
+
+    local now = GetTime()
+    if ZugZug.lastVersionGossipReplyAt and now - ZugZug.lastVersionGossipReplyAt < 4 then
+        return
+    end
+
+    ZugZug.lastVersionGossipReplyAt = now
+    ZugZug_BroadcastAddon("VERSION~" .. ZugZug.VERSION)
 end
 
 local function ZugZug_HexPairToNumber(pair)
@@ -1993,6 +2155,17 @@ local function ZugZug_GetMyMapPositionSafe()
         SetMapToCurrentZone()
     end
 
+    local currentContinent = nil
+    local currentZone = nil
+
+    if GetCurrentMapContinent then
+        currentContinent = GetCurrentMapContinent()
+    end
+
+    if GetCurrentMapZone then
+        currentZone = GetCurrentMapZone()
+    end
+
     local mapFile = ZugZug_GetCurrentMapInfoSafe()
     local zone = ""
 
@@ -2018,14 +2191,14 @@ local function ZugZug_GetMyMapPositionSafe()
     if not x then x = 0 end
     if not y then y = 0 end
 
-    return mapFile, zone, x, y
+    return mapFile, zone, x, y, currentContinent, currentZone
 end
 
 function ZugZug_BroadcastMyLocation()
     if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
     if not ZugZug_GetShareMyLocation or not ZugZug_GetShareMyLocation() then return end
 
-    local mapFile, zone, x, y = ZugZug_GetMyMapPositionSafe()
+    local mapFile, zone, x, y, continent, zoneIndex = ZugZug_GetMyMapPositionSafe()
 
     if not mapFile or mapFile == "" then return end
     if not zone or zone == "" then return end
@@ -2044,7 +2217,9 @@ function ZugZug_BroadcastMyLocation()
         .. tostring(xi) .. ":"
         .. tostring(yi) .. ":"
         .. ZugZug_SafeEncodeText(class) .. ":"
-        .. tostring(time())
+        .. tostring(time()) .. ":"
+        .. tostring(continent or 0) .. ":"
+        .. tostring(zoneIndex or 0)
     )
 end
 
@@ -2052,10 +2227,6 @@ function ZugZug_SetGuildLocationFromPayload(sender, payload)
     if not sender or sender == "" then return end
     if sender == UnitName("player") then return end
     if not payload or payload == "" then return end
-
-    if not ZugZug_GetShowGuildLocations or not ZugZug_GetShowGuildLocations() then
-        return
-    end
 
     local parts = {}
     local startPos = 1
@@ -2081,6 +2252,8 @@ function ZugZug_SetGuildLocationFromPayload(sender, payload)
     local yi = tonumber(parts[4] or "0") or 0
     local class = ZugZug_NormalizeClass(ZugZug_SafeDecodeText(parts[5] or ""))
     local sentAt = tonumber(parts[6] or "0") or time()
+    local continent = tonumber(parts[7] or "0") or 0
+    local zoneIndex = tonumber(parts[8] or "0") or 0
 
     if mapFile == "" then return end
     if xi <= 0 and yi <= 0 then return end
@@ -2103,7 +2276,65 @@ function ZugZug_SetGuildLocationFromPayload(sender, payload)
         y = yi / 10000,
         class = class,
         updatedAt = sentAt,
+        continent = continent,
+        zoneIndex = zoneIndex,
     }
+end
+
+function ZugZug_FindGuildLocation(name)
+    if not name or name == "" then return nil end
+    if not ZugZug.guildLocations then return nil end
+
+    ZugZug_PruneGuildLocations()
+
+    local wanted = string.lower(name)
+
+    for locName, loc in pairs(ZugZug.guildLocations) do
+        if locName and loc and string.lower(locName) == wanted then
+            return loc
+        end
+    end
+
+    return nil
+end
+
+function ZugZug_ShowGuildLocation(name)
+    local loc = ZugZug_FindGuildLocation(name)
+
+    if not loc then
+        ZugZug_Log("Cannot find " .. tostring(name or "") .. ".")
+        return false
+    end
+
+    if WorldMapFrame and not WorldMapFrame:IsShown() then
+        if ToggleWorldMap then
+            ToggleWorldMap()
+        elseif ShowUIPanel then
+            ShowUIPanel(WorldMapFrame)
+        else
+            WorldMapFrame:Show()
+        end
+    end
+
+    if loc.continent and loc.zoneIndex and loc.continent > 0 and loc.zoneIndex > 0 and SetMapZoom then
+        SetMapZoom(loc.continent, loc.zoneIndex)
+    end
+
+    if ZugZug_Map_UpdateGuildPins then
+        ZugZug_Map_UpdateGuildPins()
+    end
+
+    if ZugZug_Wait and ZugZug_Map_UpdateGuildPins then
+        ZugZug_Wait(0.1, function()
+            if loc.continent and loc.zoneIndex and loc.continent > 0 and loc.zoneIndex > 0 and SetMapZoom then
+                SetMapZoom(loc.continent, loc.zoneIndex)
+            end
+
+            ZugZug_Map_UpdateGuildPins()
+        end)
+    end
+
+    return true
 end
 
 function ZugZug_PruneGuildLocations()

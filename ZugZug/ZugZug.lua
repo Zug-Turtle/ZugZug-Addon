@@ -2,6 +2,7 @@
 local function ZugZug_ShowHelp()
     ZugZug_Log("Commands:")
     ZugZug_Log("|cff00ffff/zug|r - Toggle Guild UI")
+    ZugZug_Log("|cff00ffff/zug see [name]|r - Show a guildie's last shared map location")
     ZugZug_Log("|cff00ffff/zug help|r - Show commands")
 end
 
@@ -98,6 +99,19 @@ local function ZugZug_OnSlashCommand(msg)
 
     if cmd == "" then ZugZug_UI_Toggle() return end
     if cmd == "perf" then ZugZug_ShowPerf() return end
+    if cmd == "see" then
+        local name = ZugZug_NormalizeString(args or "")
+        if not name then
+            ZugZug_Log("Usage: |cff00ffff/zug see [name]|r")
+            return
+        end
+        if ZugZug_ShowGuildLocation then
+            ZugZug_ShowGuildLocation(name)
+        else
+            ZugZug_Log("Cannot find " .. name .. ".")
+        end
+        return
+    end
     if cmd == "help" or cmd == "?" then ZugZug_ShowHelp() return end
 
 
@@ -144,6 +158,57 @@ local function ZugZug_OnAddonMessage()
                 ZugZug_UI_UpdateActiveTabThrottled("addon_login", 0.25)
             else
                 ZugZug_UI_UpdateTab("guild", "addon_login")
+            end
+        end
+        return
+    end
+
+    if cmd == "VERSION" then
+        ZugZug_RecordAddonUser(sender, data)
+        if ZugZug_MaybeReplyVersionGossip then
+            ZugZug_MaybeReplyVersionGossip()
+        end
+        if ZugZug.UI and ZugZug.UI.activeTab == "guild" then
+            if ZugZug_UI_UpdateActiveTabThrottled then
+                ZugZug_UI_UpdateActiveTabThrottled("addon_version", 0.25)
+            else
+                ZugZug_UI_UpdateTab("guild", "addon_version")
+            end
+        end
+        return
+    end
+
+    if cmd == "NOTICE" then
+        if sender == ZugZug.BOTNAME then
+            local sep = string.find(data or "", ":", 1, true)
+            if sep then
+                local target = ZugZug_SafeDecodeText(string.sub(data, 1, sep - 1))
+                local notice = ZugZug_SafeDecodeText(string.sub(data, sep + 1))
+                if target and string.lower(target) == string.lower(UnitName("player") or "") and notice and notice ~= "" then
+                    ZugZug_Log(notice)
+                end
+            end
+        end
+        return
+    end
+
+    if cmd == "CAPS" then
+        if sender == ZugZug.BOTNAME then
+            local sep = string.find(data or "", ":", 1, true)
+            if sep then
+                local target = ZugZug_SafeDecodeText(string.sub(data, 1, sep - 1))
+                local caps = string.sub(data, sep + 1)
+                if target and string.lower(target) == string.lower(UnitName("player") or "") then
+                    local ahEnabled = nil
+                    if string.find(caps or "", "AH=1", 1, true) then
+                        ahEnabled = true
+                    elseif string.find(caps or "", "AH=0", 1, true) then
+                        ahEnabled = false
+                    end
+                    if ahEnabled ~= nil and ZugZug_UI_SetAuctionTabEnabled then
+                        ZugZug_UI_SetAuctionTabEnabled(ahEnabled)
+                    end
+                end
             end
         end
         return
@@ -286,6 +351,9 @@ local function ZugZug_RunGuildStartup()
 
     ZugZug_UI_RegisterDefaultTabs()
     ZugZug_UI_CreateMinimapButton()
+    if ZugZug_UpdateFriendCache then
+        ZugZug_UpdateFriendCache(true)
+    end
     if ZugZug_AH_HookTooltips then
         ZugZug_AH_HookTooltips()
     end
@@ -321,6 +389,9 @@ zug:RegisterEvent("ZONE_CHANGED_INDOORS")
 zug:RegisterEvent("PARTY_INVITE_REQUEST")
 zug:RegisterEvent("PARTY_MEMBERS_CHANGED")
 zug:RegisterEvent("RAID_ROSTER_UPDATE")
+pcall(function()
+    zug:RegisterEvent("FRIENDLIST_UPDATE")
+end)
 pcall(function()
     zug:RegisterEvent("PLAYER_GUILD_UPDATE")
 end)
@@ -372,6 +443,21 @@ zug:SetScript("OnEvent", function()
 
         if ZugZug_UI_UpdateActiveTabThrottled then
             ZugZug_UI_UpdateActiveTabThrottled("guild_roster", 0.25)
+        end
+    elseif event == "FRIENDLIST_UPDATE" then
+        if not ZugZug_IsReadyGuildMember() then return end
+        if ZugZug_UpdateFriendCache then
+            ZugZug_UpdateFriendCache()
+        end
+        if ZugZug_UpdateOnlineMembers then
+            ZugZug_UpdateOnlineMembers()
+        end
+        if ZugZug.UI and ZugZug.UI.activeTab == "guild" then
+            if ZugZug_UI_UpdateActiveTabThrottled then
+                ZugZug_UI_UpdateActiveTabThrottled("friendlist", 0.25)
+            else
+                ZugZug_UI_UpdateTab("guild", "friendlist")
+            end
         end
     elseif event == "PLAYER_LOGIN" then
         ZugZug_Wait(1, function()
