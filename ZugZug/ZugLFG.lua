@@ -87,10 +87,6 @@ local function ZugZug_LFG_RefreshUIThrottled(reason)
     end
 end
 
-local function ZugZug_LFG_NewId()
-    return UnitName("player") .. tostring(time())
-end
-
 local function ZugZug_LFG_GetPlayerClass()
     local _, class = UnitClass("player")
     if class then return class end
@@ -101,16 +97,6 @@ local function ZugZug_LFG_GetPlayerLevel()
     local level = UnitLevel("player")
     if level then return level end
     return 0
-end
-
-local function ZugZug_LFG_GetPlayerZone()
-    if GetRealZoneText then
-        return GetRealZoneText() or ""
-    end
-    if GetZoneText then
-        return GetZoneText() or ""
-    end
-    return ""
 end
 
 function ZugZug_LFG_IsCreateOpen()
@@ -1035,16 +1021,23 @@ function ZugZug_LFG_CreateListing(target, note)
     local player = UnitName("player")
     local now = time()
     local leaderRole = ZugZug_LFG_GetCreateRole()
+    local zone = ""
+
+    if GetRealZoneText then
+        zone = GetRealZoneText() or ""
+    elseif GetZoneText then
+        zone = GetZoneText() or ""
+    end
 
     if ZugZug_SaveLFGRole then
         ZugZug_SaveLFGRole(player, leaderRole)
     end
 
     local listing = {
-        id = ZugZug_LFG_NewId(),
+        id = player .. tostring(now),
         type = ZugZug_LFG_GetCreateType(),
         target = target,
-        zone = ZugZug_LFG_GetPlayerZone(),
+        zone = zone,
         leader = player,
         leaderRole = leaderRole,
         leaderClass = ZugZug_LFG_GetPlayerClass(),

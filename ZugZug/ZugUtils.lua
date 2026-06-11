@@ -1,7 +1,7 @@
 ZugZug = {}
 ZugZug.NAME = "ZugZug"
 ZugZug.BOTNAME = "Zugbot"
-ZugZug.VERSION = "1.0.0"
+ZugZug.VERSION = "1.0.1"
 ZugZug.GUILD_NAME = "Zug Zug"
 ZugZug.PREFIX = "ZUGZUG"
 ZugZug.DISCORD = "https://discord.gg/cG27gCEK4c"

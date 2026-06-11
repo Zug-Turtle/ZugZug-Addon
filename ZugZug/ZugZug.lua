@@ -333,9 +333,13 @@ local function ZugZug_RefreshDashboardMOTD(throttleReason)
     return changed
 end
 
-local function ZugZug_GetPlayerGuildRankIndex()
+function ZugZug_RefreshOfficerAccess(reason)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
+        return false
+    end
+
     if not IsInGuild or not IsInGuild() then
-        return nil, false
+        return false
     end
 
     if GuildRoster then
@@ -343,38 +347,31 @@ local function ZugZug_GetPlayerGuildRankIndex()
     end
 
     if not GetNumGuildMembers or not GetGuildRosterInfo then
-        return nil, false
+        return false
     end
 
     local playerName = UnitName("player")
     if not playerName or playerName == "" then
-        return nil, false
+        return false
     end
 
     local wanted = string.lower(playerName)
+    local rankIndex = nil
     local numMembers = GetNumGuildMembers() or 0
     local i = 1
 
     while i <= numMembers do
-        local fullName, rank, rankIndex = GetGuildRosterInfo(i)
+        local fullName, rank, rosterRankIndex = GetGuildRosterInfo(i)
 
         if fullName and string.lower(fullName) == wanted then
-            return tonumber(rankIndex), true
+            rankIndex = tonumber(rosterRankIndex)
+            break
         end
 
         i = i + 1
     end
 
-    return nil, false
-end
-
-function ZugZug_RefreshOfficerAccess(reason)
-    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
-        return false
-    end
-
-    local rankIndex, found = ZugZug_GetPlayerGuildRankIndex()
-    if not found then
+    if rankIndex == nil then
         return false
     end
 
@@ -403,23 +400,6 @@ function ZugZug_RefreshOfficerAccess(reason)
     return enabled
 end
 
-local function ZugZug_StartOfficerAccessRetry()
-    if not ZugZug_Wait then
-        ZugZug_RefreshOfficerAccess("startup_retry")
-        return
-    end
-
-    ZugZug_Wait(0.5, function()
-        ZugZug_RefreshOfficerAccess("startup_retry_1")
-    end)
-    ZugZug_Wait(2, function()
-        ZugZug_RefreshOfficerAccess("startup_retry_2")
-    end)
-    ZugZug_Wait(4, function()
-        ZugZug_RefreshOfficerAccess("startup_retry_3")
-    end)
-end
-
 local function ZugZug_RunGuildStartup()
     if ZugZug.guildStartupComplete then
         return ZugZug_IsReadyGuildMember()
@@ -437,7 +417,19 @@ local function ZugZug_RunGuildStartup()
     end
 
     ZugZug_UI_RegisterDefaultTabs()
-    ZugZug_StartOfficerAccessRetry()
+    if ZugZug_Wait then
+        ZugZug_Wait(0.5, function()
+            ZugZug_RefreshOfficerAccess("startup_retry_1")
+        end)
+        ZugZug_Wait(2, function()
+            ZugZug_RefreshOfficerAccess("startup_retry_2")
+        end)
+        ZugZug_Wait(4, function()
+            ZugZug_RefreshOfficerAccess("startup_retry_3")
+        end)
+    else
+        ZugZug_RefreshOfficerAccess("startup_retry")
+    end
     ZugZug_UI_CreateMinimapButton()
     if ZugZug_UpdateFriendCache then
         ZugZug_UpdateFriendCache(true)
