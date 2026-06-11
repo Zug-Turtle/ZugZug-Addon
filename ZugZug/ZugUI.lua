@@ -3625,6 +3625,23 @@ function ZugZug_UI_SetAuctionTabEnabled(enabled)
     end
 end
 
+function ZugZug_UI_SetOfficerTabEnabled(enabled)
+    if not ZugZug.UI then return end
+
+    if enabled then
+        ZugZug.officerTabEnabled = true
+        if not ZugZug.UI.tabsByKey or not ZugZug.UI.tabsByKey.officer then
+            ZugZug_UI_RegisterTab("officer", "Officer", ZugZug_UI_BuildOfficer)
+            ZugZug_UI_SetTabUpdateFunc("officer", ZugZug_UI_UpdateOfficer)
+        end
+    else
+        ZugZug.officerTabEnabled = false
+        if ZugZug.UI.tabsByKey and ZugZug.UI.tabsByKey.officer then
+            ZugZug_UI_UnregisterTab("officer")
+        end
+    end
+end
+
 local function ZugZug_UI_DegToRad(deg)
     return deg * 0.017453292519943 -- Thank fuck https://www.unitjuggler.com/convert-angle-from-deg-to-rad.html
 end
@@ -3773,13 +3790,12 @@ function ZugZug_UI_RegisterDefaultTabs()
         ZugZug_UI_SetAuctionTabEnabled(true)
     end
 
-    if ZugZug_isOfficerOrGM(UnitName("player")) then 
-        ZugZug_UI_RegisterTab("officer", "Officer", ZugZug_UI_BuildOfficer)
-        ZugZug_UI_SetTabUpdateFunc("officer", ZugZug_UI_UpdateOfficer)
-    end
-
     ZugZug_UI_RegisterTab("settings", "Settings", ZugZug_UI_BuildSettings)
     ZugZug_UI_SetTabUpdateFunc("settings", ZugZug_UI_UpdateSettings)
 
     ZugZug.UI.defaultTabsRegistered = true
+
+    if ZugZug_RefreshOfficerAccess then
+        ZugZug_RefreshOfficerAccess("default_tabs")
+    end
 end

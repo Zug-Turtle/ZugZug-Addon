@@ -333,6 +333,93 @@ local function ZugZug_RefreshDashboardMOTD(throttleReason)
     return changed
 end
 
+local function ZugZug_GetPlayerGuildRankIndex()
+    if not IsInGuild or not IsInGuild() then
+        return nil, false
+    end
+
+    if GuildRoster then
+        GuildRoster()
+    end
+
+    if not GetNumGuildMembers or not GetGuildRosterInfo then
+        return nil, false
+    end
+
+    local playerName = UnitName("player")
+    if not playerName or playerName == "" then
+        return nil, false
+    end
+
+    local wanted = string.lower(playerName)
+    local numMembers = GetNumGuildMembers() or 0
+    local i = 1
+
+    while i <= numMembers do
+        local fullName, rank, rankIndex = GetGuildRosterInfo(i)
+
+        if fullName and string.lower(fullName) == wanted then
+            return tonumber(rankIndex), true
+        end
+
+        i = i + 1
+    end
+
+    return nil, false
+end
+
+function ZugZug_RefreshOfficerAccess(reason)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
+        return false
+    end
+
+    local rankIndex, found = ZugZug_GetPlayerGuildRankIndex()
+    if not found then
+        return false
+    end
+
+    local enabled = false
+    if rankIndex and rankIndex <= 2 then
+        enabled = true
+    end
+
+    ZugZug.officerAccessKnown = true
+
+    if ZugZug.officerAccessEnabled ~= enabled then
+        ZugZug.officerAccessEnabled = enabled
+        if ZugZug_UI_SetOfficerTabEnabled then
+            ZugZug_UI_SetOfficerTabEnabled(enabled)
+        end
+    elseif enabled and ZugZug_UI_SetOfficerTabEnabled then
+        if not ZugZug.UI or not ZugZug.UI.tabsByKey or not ZugZug.UI.tabsByKey.officer then
+            ZugZug_UI_SetOfficerTabEnabled(true)
+        end
+    elseif not enabled and ZugZug_UI_SetOfficerTabEnabled then
+        if ZugZug.UI and ZugZug.UI.tabsByKey and ZugZug.UI.tabsByKey.officer then
+            ZugZug_UI_SetOfficerTabEnabled(false)
+        end
+    end
+
+    return enabled
+end
+
+local function ZugZug_StartOfficerAccessRetry()
+    if not ZugZug_Wait then
+        ZugZug_RefreshOfficerAccess("startup_retry")
+        return
+    end
+
+    ZugZug_Wait(0.5, function()
+        ZugZug_RefreshOfficerAccess("startup_retry_1")
+    end)
+    ZugZug_Wait(2, function()
+        ZugZug_RefreshOfficerAccess("startup_retry_2")
+    end)
+    ZugZug_Wait(4, function()
+        ZugZug_RefreshOfficerAccess("startup_retry_3")
+    end)
+end
+
 local function ZugZug_RunGuildStartup()
     if ZugZug.guildStartupComplete then
         return ZugZug_IsReadyGuildMember()
@@ -350,6 +437,7 @@ local function ZugZug_RunGuildStartup()
     end
 
     ZugZug_UI_RegisterDefaultTabs()
+    ZugZug_StartOfficerAccessRetry()
     ZugZug_UI_CreateMinimapButton()
     if ZugZug_UpdateFriendCache then
         ZugZug_UpdateFriendCache(true)
@@ -419,6 +507,8 @@ zug:SetScript("OnEvent", function()
 
         if not ZugZug.READY and not ZugZug.guildStartupComplete then
             ZugZug_RunGuildStartup()
+        else
+            ZugZug_RefreshOfficerAccess("player_guild_update")
         end
     elseif event == "GUILD_ROSTER_UPDATE" then 
         if not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then
@@ -437,6 +527,7 @@ zug:SetScript("OnEvent", function()
 
         ZugZug_RefreshDashboardMOTD("guild_roster_motd")
         ZugZug_UpdateOnlineMembers()
+        ZugZug_RefreshOfficerAccess("guild_roster")
         if ZugZug_LFG_PruneOffline then
             ZugZug_LFG_PruneOffline()
         end
