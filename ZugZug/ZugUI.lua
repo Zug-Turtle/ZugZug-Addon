@@ -3415,8 +3415,8 @@ function ZugZug_UI_CreateMinimapButton()
     end
 
     local button = CreateFrame("Button", "ZugZugMinimapButton", Minimap)
-    button:SetWidth(24)
-    button:SetHeight(24)
+    button:SetWidth(31)
+    button:SetHeight(31)
     button:SetFrameStrata("MEDIUM")
     button:SetFrameLevel(Minimap:GetFrameLevel() + 5)
     button:EnableMouse(true)
@@ -3424,16 +3424,17 @@ function ZugZug_UI_CreateMinimapButton()
     button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     button:RegisterForDrag("LeftButton")
 
-    local icon = button:CreateTexture(nil, "ARTWORK")
-    icon:SetAllPoints(button)
+    local icon = button:CreateTexture(nil, "BACKGROUND")
     icon:SetTexture("Interface\\AddOns\\ZugZug\\Textures\\ZugZug")
+	icon:SetPoint("TOPLEFT", button, "TOPLEFT", 2, -2)
+	icon:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -2, 2)
     button.icon = icon
 
     local border = button:CreateTexture(nil, "OVERLAY")
-    border:SetWidth(52)
-    border:SetHeight(52)
+    border:SetWidth(53)
+    border:SetHeight(53)
     border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-    border:SetPoint("CENTER", button, "CENTER", 11, -11)
+    border:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
     button.border = border
 
     local highlight = button:CreateTexture(nil, "HIGHLIGHT")
