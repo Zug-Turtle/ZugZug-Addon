@@ -1296,6 +1296,44 @@ local function ZugZug_UI_CreateIdentityPanel(parent, width, height)
         verify:SetWidth(width - 20)
         verify:SetJustifyH("LEFT")
 
+        local addonVerify = ZugZug_UI_CreateText(panel, nil, "|cffaaaaaaPaste your Discord code below to verify via Addon|r", "small")
+        addonVerify:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -76)
+        addonVerify:SetWidth(width - 20)
+        addonVerify:SetJustifyH("LEFT")
+
+        local inputFrame, input = ZugZug_UI_CreateCleanEditBox(panel, width - 84, 24, "")
+        inputFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -100)
+        input:SetMaxLetters(80)
+        input:SetScript("OnEscapePressed", function()
+            this:ClearFocus()
+        end)
+
+        local sendButton = ZugZug_UI_CreateButton(panel, nil, "Send", 54, 24)
+        sendButton:SetPoint("LEFT", inputFrame, "RIGHT", 6, 0)
+
+        local statusText = ""
+        if ZugZug.verifyCodeSubmittedAt then
+            statusText = "|cffaaaaaaVerification sent. If the dashboard does not update, /reload.|r"
+        end
+
+        local verifyStatus = ZugZug_UI_CreateText(panel, nil, statusText, "small")
+        verifyStatus:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -130)
+        verifyStatus:SetWidth(width - 20)
+        verifyStatus:SetJustifyH("LEFT")
+
+        local function sendVerifyCode()
+            local text = input:GetText() or ""
+
+            if ZugZug_SendVerificationCode and ZugZug_SendVerificationCode(text) then
+                input:SetText("")
+                input:SetFocus()
+                verifyStatus:SetText("|cffaaaaaaVerification sent. If the dashboard does not update, /reload.|r")
+            end
+        end
+
+        sendButton:SetScript("OnClick", sendVerifyCode)
+        input:SetScript("OnEnterPressed", sendVerifyCode)
+
         return panel
     end
 
@@ -2192,14 +2230,41 @@ local function ZugZug_UI_BuildLFG(parent)
     end
 end
 
+local function ZugZug_UI_GetAHTooltipLink(row)
+    if not row then return "" end
+
+    local itemId = tonumber(row.itemId or 0) or 0
+    if itemId <= 0 and row.itemLink and row.itemLink ~= "" and ZugZug_AH_GetItemIdFromLink then
+        itemId = ZugZug_AH_GetItemIdFromLink(row.itemLink)
+    end
+
+    if itemId > 0 and ZugZug_AH_BuildItemLink then
+        return ZugZug_AH_BuildItemLink(itemId)
+    end
+
+    if row.itemLink and row.itemLink ~= "" then
+        local _, _, rawLink = string.find(row.itemLink, "|H([^|]+)|h")
+        if rawLink and string.find(rawLink, "^item:") then
+            return rawLink
+        end
+        if string.find(row.itemLink, "^item:") then
+            return row.itemLink
+        end
+    end
+
+    return ""
+end
+
 local function ZugZug_UI_BuildAuctionHouse(parent)
     parent.refs = parent.refs or {}
 
-    local title = ZugZug_UI_CreateText(parent, nil, "WoWAuctions Search", "large")
+    local title = ZugZug_UI_CreateText(parent, nil, "Auction House Search", "large")
     title:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
 
-    local historyNote = ZugZug_UI_CreateText(parent, nil, "|cff777777Visit |r|cffffffffWoWAuctions.com|r|cff777777 for historical data|r", "small")
+    --[[
+    local historyNote = ZugZug_UI_CreateText(parent, nil, "|cff777777Visit |r|cffffffffWoWAuctions.net|r|cff777777 for historical data|r", "small")
     historyNote:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, -3)
+    --]]
 
     local inputFrame, searchEdit = ZugZug_UI_CreateCleanEditBox(parent, 438, 24, "")
     inputFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -34)
@@ -2342,7 +2407,14 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
     while sourceRows and i <= table.getn(sourceRows) do
         local row = sourceRows[i]
         if row then
-            if not onlyMine or string.lower(row.requester or "") == string.lower(player) then
+            local rowIsMine = false
+            if ZugZug_AH_IsRequesterMine then
+                rowIsMine = ZugZug_AH_IsRequesterMine(row.requester or "")
+            else
+                rowIsMine = string.lower(row.requester or "") == string.lower(player)
+            end
+
+            if not onlyMine or rowIsMine then
                 visibleCount = visibleCount + 1
                 rows[visibleCount] = row
             end
@@ -2384,6 +2456,7 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
         iconButton:SetHeight(32)
         iconButton:SetPoint("TOPLEFT", card, "TOPLEFT", 8, -8)
         iconButton.itemLink = row.itemLink
+        iconButton.tooltipLink = ZugZug_UI_GetAHTooltipLink(row)
         iconButton:SetScript("OnMouseDown", clearSearchFocus)
 
         local icon = iconButton:CreateTexture(nil, "ARTWORK")
@@ -2396,8 +2469,8 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
 
         iconButton:SetScript("OnEnter", function()
             GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-            if this.itemLink and this.itemLink ~= "" and GameTooltip.SetHyperlink then
-                GameTooltip:SetHyperlink(this.itemLink)
+            if this.tooltipLink and this.tooltipLink ~= "" and GameTooltip.SetHyperlink then
+                GameTooltip:SetHyperlink(this.tooltipLink)
             else
                 GameTooltip:SetText("Auction search")
             end
@@ -2424,17 +2497,21 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
         nameButton:SetHeight(18)
         nameButton:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -8)
         nameButton.itemLink = row.itemLink
+        nameButton.tooltipLink = ZugZug_UI_GetAHTooltipLink(row)
+        nameButton.tooltipName = displayName
         nameButton:SetScript("OnMouseDown", clearSearchFocus)
 
         local nameFont = ZugZug_UI_CreateText(nameButton, nil, nameText, "normal")
         nameFont:SetAllPoints(nameButton)
 
         nameButton:SetScript("OnEnter", function()
-            if this.itemLink and this.itemLink ~= "" and GameTooltip.SetHyperlink then
-                GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-                GameTooltip:SetHyperlink(this.itemLink)
-                GameTooltip:Show()
+            GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+            if this.tooltipLink and this.tooltipLink ~= "" and GameTooltip.SetHyperlink then
+                GameTooltip:SetHyperlink(this.tooltipLink)
+            else
+                GameTooltip:SetText(this.tooltipName or "Auction search")
             end
+            GameTooltip:Show()
         end)
 
         nameButton:SetScript("OnLeave", function()

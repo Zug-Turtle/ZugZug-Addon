@@ -1,7 +1,7 @@
 ZugZug = {}
 ZugZug.NAME = "ZugZug"
 ZugZug.BOTNAME = "Zugbot"
-ZugZug.VERSION = "1.0.1"
+ZugZug.VERSION = "1.0.2"
 ZugZug.GUILD_NAME = "Zug Zug"
 ZugZug.PREFIX = "ZUGZUG"
 ZugZug.DISCORD = "https://discord.gg/cG27gCEK4c"
@@ -675,6 +675,12 @@ function ZugZug_SetDashboardIdentityFromPayload(payload)
     identity.realmsByKey = nil
     ZugZugDB.dashboardIdentity = identity
     ZugZug.dashboardIdentity = ZugZugDB.dashboardIdentity
+
+    if identity.verified then
+        ZugZug.verifyCodeSubmittedAt = nil
+        ZugZug.verifyIdentityRefreshSeq = nil
+    end
+
     return true
 end
 
@@ -727,6 +733,74 @@ function ZugZug_SendCapyChatMessage(msg)
     return true
 end
 
+function ZugZug_SendVerificationCode(text)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return false end
+
+    text = ZugZug_NormalizeString(text)
+    if not text then return false end
+
+    local code = nil
+    local firstSpace = string.find(text, " ", 1, true)
+
+    if firstSpace then
+        local first = string.sub(text, 1, firstSpace - 1)
+        local rest = string.gsub(string.sub(text, firstSpace + 1), "^%s+", "")
+
+        if string.lower(first or "") == "discord" then
+            local restSpace = string.find(rest, " ", 1, true)
+            if restSpace then
+                code = string.sub(rest, 1, restSpace - 1)
+            else
+                code = rest
+            end
+        else
+            code = first
+        end
+    else
+        code = text
+    end
+
+    code = ZugZug_NormalizeString(code)
+    if not code then return false end
+
+    ZugZug_BroadcastAddon("VERIFY_CODE~" .. ZugZug_SafeEncodeText(code))
+    ZugZug.verifyCodeSubmittedAt = time()
+    ZugZug.verifyIdentityRefreshSeq = (ZugZug.verifyIdentityRefreshSeq or 0) + 1
+
+    local refreshSeq = ZugZug.verifyIdentityRefreshSeq
+
+    if ZugZug_Wait then
+        ZugZug_Wait(2, function()
+            if ZugZug.verifyIdentityRefreshSeq == refreshSeq and ZugZug_RequestDashboardIdentity then
+                ZugZug_RequestDashboardIdentity("verify_2")
+            end
+        end)
+        ZugZug_Wait(6, function()
+            if ZugZug.verifyIdentityRefreshSeq == refreshSeq and ZugZug_RequestDashboardIdentity then
+                ZugZug_RequestDashboardIdentity("verify_6")
+            end
+        end)
+        ZugZug_Wait(12, function()
+            if ZugZug.verifyIdentityRefreshSeq == refreshSeq and ZugZug_RequestDashboardIdentity then
+                ZugZug_RequestDashboardIdentity("verify_12")
+            end
+        end)
+    elseif ZugZug_RequestDashboardIdentity then
+        ZugZug_RequestDashboardIdentity("verify")
+    end
+
+    return true
+end
+
+function ZugZug_RequestDashboardIdentity(reason)
+    if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return false end
+
+    ZugZug_BroadcastAddon("LOGIN~" .. ZugZug.VERSION)
+    return true
+end
+
+local ZugZug_AH_IsResultForMe
+
 local function ZugZug_AH_GetContiguousCount(t)
     local count = 0
     while t and t[count + 1] do
@@ -735,19 +809,42 @@ local function ZugZug_AH_GetContiguousCount(t)
     return count
 end
 
-local function ZugZug_AH_TrimLog()
-    if not ZugZugDB or not ZugZugDB.ahSearchLog then return end
+local function ZugZug_AH_RemoveLogRowAt(rows, index, count)
+    if not rows or not index or not count then return end
+
+    while index < count do
+        rows[index] = rows[index + 1]
+        index = index + 1
+    end
+
+    rows[count] = nil
+end
+
+local function ZugZug_AH_TrimRowsPreferNonMine(rows)
+    if not rows then return 0 end
 
     local maxRows = ZugZug.AH_MAX_SEARCH_LOG or 100
-    local count = ZugZug_AH_GetContiguousCount(ZugZugDB.ahSearchLog)
+    local count = ZugZug_AH_GetContiguousCount(rows)
 
     while count > maxRows do
-        ZugZugDB.ahSearchLog[count] = nil
+        local removeIndex = count
+        local i = count
+
+        while i >= 1 do
+            local row = rows[i]
+            if row and not ZugZug_AH_IsResultForMe(row.requester or "") then
+                removeIndex = i
+                break
+            end
+            i = i - 1
+        end
+
+        ZugZug_AH_RemoveLogRowAt(rows, removeIndex, count)
         count = count - 1
     end
 
-    ZugZugDB.ahSearchLog.n = count
-    ZugZug.ahSearchLog = ZugZugDB.ahSearchLog
+    rows.n = count
+    return count
 end
 
 function ZugZug_AH_GetItemIdFromLink(link)
@@ -790,6 +887,7 @@ local function ZugZug_AH_IsIconTexture(value)
     local lower = string.lower(value)
     if string.find(lower, "interface\\icons\\", 1, true) then return true end
     if string.find(lower, "interface/icons/", 1, true) then return true end
+    if string.find(lower, "^invtype_") then return false end
     if string.find(lower, "^inv_") then return true end
     if string.find(lower, "^spell_") then return true end
     if string.find(lower, "^ability_") then return true end
@@ -828,6 +926,44 @@ function ZugZug_AH_BuildItemLink(itemId)
     itemId = tonumber(itemId or 0) or 0
     if itemId <= 0 then return "" end
     return "item:" .. tostring(itemId) .. ":0:0:0"
+end
+
+local function ZugZug_AH_StripRealmName(name)
+    local value = tostring(name or "")
+    local dash = string.find(value, "-", 1, true)
+    if dash then
+        value = string.sub(value, 1, dash - 1)
+    end
+    return value
+end
+
+ZugZug_AH_IsResultForMe = function(requester)
+    local player = UnitName and UnitName("player") or ""
+    requester = ZugZug_AH_StripRealmName(requester)
+    player = ZugZug_AH_StripRealmName(player)
+    if requester == "" or player == "" then return false end
+    return string.lower(requester) == string.lower(player)
+end
+
+function ZugZug_AH_IsRequesterMine(requester)
+    return ZugZug_AH_IsResultForMe(requester)
+end
+
+local function ZugZug_AH_NormalizeResultLink(itemId, itemName, itemLink)
+    itemId = tonumber(itemId or 0) or 0
+    itemName = tostring(itemName or "")
+    itemLink = tostring(itemLink or "")
+
+    if itemId <= 0 then return itemLink end
+    if itemLink == "" then
+        itemLink = ZugZug_AH_BuildItemLink(itemId)
+    end
+
+    if string.find(itemLink, "item:", 1, true) and not string.find(itemLink, "|Hitem:", 1, true) and itemName ~= "" then
+        return "|cffffffff|H" .. itemLink .. "|h[" .. itemName .. "]|h|r"
+    end
+
+    return itemLink
 end
 
 function ZugZug_AH_GetItemInfoFromLink(link)
@@ -884,12 +1020,54 @@ function ZugZug_AH_TimeAgo(timestamp)
     return tostring(math.floor(diff / 86400)) .. "d ago"
 end
 
+function ZugZug_AH_PruneNonMineResults()
+    if not ZugZugDB then return end
+
+    if ZugZugDB.ahSearchLog then
+        local kept = {}
+        local keptIndex = 1
+        local i = 1
+        local count = ZugZug_AH_GetContiguousCount(ZugZugDB.ahSearchLog)
+
+        while i <= count do
+            local row = ZugZugDB.ahSearchLog[i]
+            if row and ZugZug_AH_IsResultForMe(row.requester or "") then
+                kept[keptIndex] = row
+                keptIndex = keptIndex + 1
+            end
+            i = i + 1
+        end
+
+        ZugZug_ClearTable(ZugZugDB.ahSearchLog)
+
+        i = 1
+        while kept[i] do
+            ZugZugDB.ahSearchLog[i] = kept[i]
+            i = i + 1
+        end
+
+        ZugZugDB.ahSearchLog.n = keptIndex - 1
+        ZugZug.ahSearchLog = ZugZugDB.ahSearchLog
+    end
+
+    if ZugZugDB.ahPriceCacheByItemId then
+        for itemId, cached in pairs(ZugZugDB.ahPriceCacheByItemId) do
+            if not cached or not ZugZug_AH_IsResultForMe(cached.requester or "") then
+                ZugZugDB.ahPriceCacheByItemId[itemId] = nil
+            end
+        end
+
+        ZugZug.ahPriceCacheByItemId = ZugZugDB.ahPriceCacheByItemId
+    end
+end
+
 function ZugZug_AH_SetOnlyMine(enabled)
     if not ZugZugDB then ZugZugDB = {} end
 
     if enabled then
         ZugZugDB.ahOnlyMine = true
         ZugZug.ahOnlyMine = true
+        ZugZug_AH_PruneNonMineResults()
     else
         ZugZugDB.ahOnlyMine = false
         ZugZug.ahOnlyMine = false
@@ -903,14 +1081,31 @@ end
 
 function ZugZug_AH_GetSearchLog()
     if not ZugZug.ahSearchLog then return {} end
-    return ZugZug.ahSearchLog
+
+    local rows = {}
+    local outIndex = 1
+    local i = 1
+    local count = ZugZug_AH_GetContiguousCount(ZugZug.ahSearchLog)
+    while i <= count do
+        local row = ZugZug.ahSearchLog[i]
+        if row then
+            rows[outIndex] = row
+            outIndex = outIndex + 1
+        end
+        i = i + 1
+    end
+
+    return rows
 end
 
 function ZugZug_AH_GetCachedPrice(itemId)
     itemId = tonumber(itemId or 0) or 0
     if itemId <= 0 then return nil end
     if not ZugZug.ahPriceCacheByItemId then return nil end
-    return ZugZug.ahPriceCacheByItemId[tostring(itemId)]
+    local cached = ZugZug.ahPriceCacheByItemId[tostring(itemId)]
+    if not cached then return nil end
+    if ZugZug_AH_GetOnlyMine() and not ZugZug_AH_IsResultForMe(cached.requester or "") then return nil end
+    return cached
 end
 
 function ZugZug_AH_ClearResults()
@@ -992,48 +1187,118 @@ function ZugZug_AH_AddResult(row)
 
     local maxRows = ZugZug.AH_MAX_SEARCH_LOG or 100
     local itemId = tonumber(row.itemId or 0) or 0
-    local compacted = {}
-    local compactIndex = 1
+    if itemId <= 0 then return false end
+
+    local incomingIsMine = ZugZug_AH_IsResultForMe(row.requester or "")
+    local existing = nil
+    local existingIndex = nil
     local i = 1
     local count = ZugZug_AH_GetContiguousCount(ZugZugDB.ahSearchLog)
 
     while i <= count do
-        local existing = ZugZugDB.ahSearchLog[i]
+        local candidate = ZugZugDB.ahSearchLog[i]
         local existingItemId = 0
 
-        if existing then
-            existingItemId = tonumber(existing.itemId or 0) or 0
+        if candidate then
+            existingItemId = tonumber(candidate.itemId or 0) or 0
         end
 
-        if existing and not (itemId > 0 and existingItemId == itemId) then
-            compacted[compactIndex] = existing
-            compactIndex = compactIndex + 1
+        if candidate and existingItemId == itemId then
+            existing = candidate
+            existingIndex = i
+            break
         end
 
         i = i + 1
     end
 
+    if ZugZug_AH_GetOnlyMine() and not incomingIsMine then
+        if not existing or not ZugZug_AH_IsResultForMe(existing.requester or "") then
+            return false
+        end
+    end
+
+    local finalRow = row
+    if existing then
+        local existingIsMine = ZugZug_AH_IsResultForMe(existing.requester or "")
+
+        if row.query and row.query ~= "" then
+            existing.query = row.query
+        end
+        existing.itemId = itemId
+        if row.itemName and row.itemName ~= "" then
+            existing.itemName = row.itemName
+        end
+        if row.itemLink and row.itemLink ~= "" then
+            existing.itemLink = row.itemLink
+        end
+        existing.minBuyout = row.minBuyout
+        existing.avgBuyout = row.avgBuyout
+        existing.auctionCount = row.auctionCount
+        existing.searchedAt = row.searchedAt
+
+        if incomingIsMine or not existingIsMine then
+            existing.requester = row.requester
+        end
+
+        finalRow = existing
+    else
+        finalRow.itemIcon = nil
+        finalRow.itemIconSource = nil
+    end
+
+    local rebuilt = {}
+    local rebuiltIndex = 1
+    rebuilt[rebuiltIndex] = finalRow
+    rebuiltIndex = rebuiltIndex + 1
+
+    i = 1
+    while i <= count do
+        local current = ZugZugDB.ahSearchLog[i]
+        local currentItemId = 0
+        if current then
+            currentItemId = tonumber(current.itemId or 0) or 0
+        end
+
+        if current and i ~= existingIndex and currentItemId ~= itemId then
+            rebuilt[rebuiltIndex] = current
+            rebuiltIndex = rebuiltIndex + 1
+        end
+
+        i = i + 1
+    end
+
+    ZugZug_AH_TrimRowsPreferNonMine(rebuilt)
     ZugZug_ClearTable(ZugZugDB.ahSearchLog)
 
     i = 1
-    while i < maxRows and compacted[i] do
-        ZugZugDB.ahSearchLog[i + 1] = compacted[i]
+    while i <= maxRows and rebuilt[i] do
+        ZugZugDB.ahSearchLog[i] = rebuilt[i]
         i = i + 1
     end
 
-    ZugZugDB.ahSearchLog[1] = row
-    ZugZug_AH_TrimLog()
+    ZugZugDB.ahSearchLog.n = ZugZug_AH_GetContiguousCount(ZugZugDB.ahSearchLog)
 
-    if row.itemId and row.itemId > 0 then
-        ZugZugDB.ahPriceCacheByItemId[tostring(row.itemId)] = {
-            itemId = row.itemId,
-            itemName = row.itemName,
-            itemLink = row.itemLink,
-            minBuyout = row.minBuyout,
-            avgBuyout = row.avgBuyout,
-            auctionCount = row.auctionCount,
-            searchedAt = row.searchedAt,
-        }
+    ZugZug_ClearTable(ZugZugDB.ahPriceCacheByItemId)
+    i = 1
+    count = ZugZug_AH_GetContiguousCount(ZugZugDB.ahSearchLog)
+    while i <= count do
+        local cachedRow = ZugZugDB.ahSearchLog[i]
+        if cachedRow and cachedRow.itemId and cachedRow.itemId > 0 then
+            ZugZugDB.ahPriceCacheByItemId[tostring(cachedRow.itemId)] = {
+                itemId = cachedRow.itemId,
+                itemName = cachedRow.itemName,
+                itemLink = cachedRow.itemLink,
+                itemIcon = cachedRow.itemIcon,
+                itemIconSource = cachedRow.itemIconSource,
+                minBuyout = cachedRow.minBuyout,
+                avgBuyout = cachedRow.avgBuyout,
+                auctionCount = cachedRow.auctionCount,
+                searchedAt = cachedRow.searchedAt,
+                requester = cachedRow.requester,
+            }
+        end
+        i = i + 1
     end
 
     ZugZug.ahSearchLog = ZugZugDB.ahSearchLog
@@ -1065,12 +1330,14 @@ function ZugZug_AH_SetResultFromPayload(payload)
     if not requester or requester == "" then return false end
     if (not query or query == "") and (not itemName or itemName == "") then return false end
     if itemId <= 0 then return false end
-    if not itemLink or itemLink == "" then itemLink = ZugZug_AH_BuildItemLink(itemId) end
+    itemLink = ZugZug_AH_NormalizeResultLink(itemId, itemName, itemLink)
 
     if itemLink ~= "" then
         local localInfo = ZugZug_AH_ReadItemInfo(itemLink)
-        itemName = localInfo.name or itemName
-        itemLink = localInfo.link or itemLink
+        if localInfo.name and localInfo.name ~= "" then
+            itemName = localInfo.name
+        end
+        itemLink = ZugZug_AH_NormalizeResultLink(itemId, itemName, localInfo.link or itemLink)
     end
 
     local row = {
@@ -1115,17 +1382,53 @@ function ZugZug_AH_TryInsertLink(link)
     return true
 end
 
+local function ZugZug_AH_GetLocalIconFromLink(link)
+    if not link or link == "" then return "" end
+
+    local localInfo = ZugZug_AH_ReadItemInfo(link)
+    local icon = ZugZug_AH_NormalizeIcon(localInfo.texture or "")
+    if icon and icon ~= "" then
+        return icon
+    end
+
+    return ""
+end
+
 function ZugZug_AH_GetLocalIcon(row)
     if not row then return "" end
 
-    local itemLink = row.itemLink or ""
-    if (not itemLink or itemLink == "") and row.itemId and row.itemId > 0 then
-        itemLink = ZugZug_AH_BuildItemLink(row.itemId)
+    local itemIcon = ""
+    if row.itemIconSource == "local" then
+        itemIcon = ZugZug_AH_NormalizeIcon(row.itemIcon or "")
+    end
+    if itemIcon and itemIcon ~= "" then
+        return itemIcon
     end
 
-    if itemLink and itemLink ~= "" then
-        local localInfo = ZugZug_AH_ReadItemInfo(itemLink)
-        return ZugZug_AH_NormalizeIcon(localInfo.texture or "")
+    local localIcon = ""
+    local itemId = tonumber(row.itemId or 0) or 0
+    if itemId > 0 then
+        localIcon = ZugZug_AH_GetLocalIconFromLink(ZugZug_AH_BuildItemLink(itemId))
+    end
+
+    local itemLink = row.itemLink or ""
+    if (not localIcon or localIcon == "") and itemLink and itemLink ~= "" then
+        localIcon = ZugZug_AH_GetLocalIconFromLink(itemLink)
+    end
+
+    if localIcon and localIcon ~= "" then
+        row.itemIcon = localIcon
+        row.itemIconSource = "local"
+
+        if ZugZugDB and ZugZugDB.ahPriceCacheByItemId and itemId > 0 then
+            local cached = ZugZugDB.ahPriceCacheByItemId[tostring(itemId)]
+            if cached then
+                cached.itemIcon = localIcon
+                cached.itemIconSource = "local"
+            end
+        end
+
+        return localIcon
     end
 
     return ""

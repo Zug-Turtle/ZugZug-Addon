@@ -437,6 +437,9 @@ local function ZugZug_RunGuildStartup()
     if ZugZug_AH_HookTooltips then
         ZugZug_AH_HookTooltips()
     end
+    if ZugZug_AH_GetOnlyMine and ZugZug_AH_GetOnlyMine() and ZugZug_AH_PruneNonMineResults then
+        ZugZug_AH_PruneNonMineResults()
+    end
 
     ZugZug_RefreshDashboardMOTD()
     ZugZug_LFG_StartTicker()
