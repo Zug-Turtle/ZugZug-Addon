@@ -472,6 +472,7 @@ zug:RegisterEvent("ZONE_CHANGED_INDOORS")
 zug:RegisterEvent("PARTY_INVITE_REQUEST")
 zug:RegisterEvent("PARTY_MEMBERS_CHANGED")
 zug:RegisterEvent("RAID_ROSTER_UPDATE")
+zug:RegisterEvent("PLAYER_REGEN_DISABLED")
 pcall(function()
     zug:RegisterEvent("FRIENDLIST_UPDATE")
 end)
@@ -487,7 +488,12 @@ if ZugZug_UI_CreateMinimapButton then
 end
 
 zug:SetScript("OnEvent", function()
-    if event == "VARIABLES_LOADED" then
+    if event == "PLAYER_REGEN_DISABLED" then
+        if ZugZug.UI and ZugZug.UI.frame and ZugZug.UI.frame:IsShown() and ZugZug_UI_Hide then
+            ZugZug_UI_Hide()
+        end
+        return
+    elseif event == "VARIABLES_LOADED" then
         ZugZug_InitDB()
         if ZugZug_UI_CreateMinimapButton then
             ZugZug_UI_CreateMinimapButton()
@@ -587,8 +593,14 @@ zug:SetScript("OnEvent", function()
         if ZugZug_LFG_OnPartyChanged then
             ZugZug_LFG_OnPartyChanged()
         end
+        if ZugZug_Map_UpdateGuildPins then
+            ZugZug_Map_UpdateGuildPins()
+        end
     elseif event == "ZONE_CHANGED" or event == "ZONE_CHANGED_NEW_AREA" or event == "ZONE_CHANGED_INDOORS" then
         if not ZugZug_IsReadyGuildMember() then return end
+        if ZugZug_Map_UpdateGuildPins then
+            ZugZug_Map_UpdateGuildPins()
+        end
         if ZugZug.UI and ZugZug.UI.activeTab == "guild" then
             if ZugZug_UI_UpdateActiveTabThrottled then
                 ZugZug_UI_UpdateActiveTabThrottled("zone_changed", 0.25)

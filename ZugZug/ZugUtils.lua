@@ -1,7 +1,7 @@
 ZugZug = {}
 ZugZug.NAME = "ZugZug"
 ZugZug.BOTNAME = "Zugbot"
-ZugZug.VERSION = "1.0.2"
+ZugZug.VERSION = "1.0.3"
 ZugZug.GUILD_NAME = "Zug Zug"
 ZugZug.PREFIX = "ZUGZUG"
 ZugZug.DISCORD = "https://discord.gg/cG27gCEK4c"
@@ -148,7 +148,7 @@ function ZugZug_InitDB()
     end
 
     if ZugZugDB.ahOnlyMine == nil then
-        ZugZugDB.ahOnlyMine = false
+        ZugZugDB.ahOnlyMine = true
     end
 
     if not ZugZugDB.window then
@@ -2442,6 +2442,67 @@ local function ZugZug_GetCurrentMapInfoSafe()
     return ""
 end
 
+function ZugZug_IsInShareBlockedInstance()
+    local inInstance = nil
+    local instanceType = nil
+
+    if IsInInstance then
+        inInstance, instanceType = IsInInstance()
+    end
+
+    if not instanceType and GetInstanceInfo then
+        local name, typeFromInfo = GetInstanceInfo()
+        instanceType = typeFromInfo
+    end
+
+    if not inInstance and not instanceType then
+        return false
+    end
+
+    instanceType = string.lower(instanceType or "")
+
+    if instanceType == "pvp" then return true end
+    if instanceType == "arena" then return true end
+    if instanceType == "party" then return true end
+    if instanceType == "raid" then return true end
+
+    return false
+end
+
+function ZugZug_IsCurrentGroupMember(name)
+    if not name or name == "" then return false end
+
+    local wanted = string.lower(name)
+    local player = UnitName("player")
+    if player and string.lower(player) == wanted then
+        return false
+    end
+
+    if GetNumRaidMembers and GetNumRaidMembers() > 0 then
+        local i = 1
+        while i <= GetNumRaidMembers() do
+            local unitName = UnitName("raid" .. tostring(i))
+            if unitName and string.lower(unitName) == wanted then
+                return true
+            end
+            i = i + 1
+        end
+    end
+
+    if GetNumPartyMembers and GetNumPartyMembers() > 0 then
+        local i = 1
+        while i <= GetNumPartyMembers() do
+            local unitName = UnitName("party" .. tostring(i))
+            if unitName and string.lower(unitName) == wanted then
+                return true
+            end
+            i = i + 1
+        end
+    end
+
+    return false
+end
+
 local function ZugZug_GetMyMapPositionSafe()
     local oldContinent = nil
     local oldZone = nil
@@ -2500,6 +2561,7 @@ end
 function ZugZug_BroadcastMyLocation()
     if not ZugZug.READY or not ZugZug_IsGuildAllowed or not ZugZug_IsGuildAllowed() then return end
     if not ZugZug_GetShareMyLocation or not ZugZug_GetShareMyLocation() then return end
+    if ZugZug_IsInShareBlockedInstance and ZugZug_IsInShareBlockedInstance() then return end
 
     local mapFile, zone, x, y, continent, zoneIndex = ZugZug_GetMyMapPositionSafe()
 
@@ -2530,6 +2592,12 @@ function ZugZug_SetGuildLocationFromPayload(sender, payload)
     if not sender or sender == "" then return end
     if sender == UnitName("player") then return end
     if not payload or payload == "" then return end
+    if ZugZug_IsCurrentGroupMember and ZugZug_IsCurrentGroupMember(sender) then
+        if ZugZug.guildLocations then
+            ZugZug.guildLocations[sender] = nil
+        end
+        return
+    end
 
     local parts = {}
     local startPos = 1
@@ -2594,6 +2662,10 @@ function ZugZug_FindGuildLocation(name)
 
     for locName, loc in pairs(ZugZug.guildLocations) do
         if locName and loc and string.lower(locName) == wanted then
+            if ZugZug_IsCurrentGroupMember and ZugZug_IsCurrentGroupMember(locName) then
+                ZugZug.guildLocations[locName] = nil
+                return nil
+            end
             return loc
         end
     end
@@ -2646,7 +2718,11 @@ function ZugZug_PruneGuildLocations()
     local now = time()
 
     for name, loc in pairs(ZugZug.guildLocations) do
-        if not loc or not loc.updatedAt or now - loc.updatedAt > (ZugZug.locationTimeout or 90) then
+        if not loc
+            or not loc.updatedAt
+            or now - loc.updatedAt > (ZugZug.locationTimeout or 90)
+            or (ZugZug_IsCurrentGroupMember and ZugZug_IsCurrentGroupMember(name))
+        then
             ZugZug.guildLocations[name] = nil
         end
     end
@@ -2734,6 +2810,11 @@ function ZugZug_Map_UpdateGuildPins()
         return
     end
 
+    if ZugZug_IsInShareBlockedInstance and ZugZug_IsInShareBlockedInstance() then
+        ZugZug_Map_HideAllPins()
+        return
+    end
+
     if not WorldMapFrame or not WorldMapFrame:IsShown() then
         ZugZug_Map_HideAllPins()
         return
@@ -2762,7 +2843,12 @@ function ZugZug_Map_UpdateGuildPins()
     local used = 0
 
     for name, loc in pairs(ZugZug.guildLocations or {}) do
-        if loc and loc.mapFile == currentMap and loc.x and loc.y then
+        if loc
+            and loc.mapFile == currentMap
+            and loc.x
+            and loc.y
+            and (not ZugZug_IsCurrentGroupMember or not ZugZug_IsCurrentGroupMember(name))
+        then
             used = used + 1
 
             local pin = ZugZug_Map_GetPin(used)

@@ -69,8 +69,27 @@ end
 
 local function ZugZug_LFG_RefreshUIImmediate()
     if ZugZug.UI and ZugZug.UI.activeTab == "lfg" then
-        if ZugZug_UI_ForceRebuildTab then
+        local page = ZugZug.UI.pages and ZugZug.UI.pages.lfg
+        local createOpen = false
+        if ZugZug_LFG_IsCreateOpen and ZugZug_LFG_IsCreateOpen() then
+            createOpen = true
+        end
+
+        local canCreate = true
+        if ZugZug_LFG_CanCreateListing and not ZugZug_LFG_CanCreateListing() then
+            canCreate = false
+        end
+
+        if page and page.refs
+            and (
+                (page.refs.createPanelShown ~= nil and page.refs.createPanelShown ~= createOpen)
+                or (page.refs.canCreate ~= nil and page.refs.canCreate ~= canCreate)
+            )
+            and ZugZug_UI_ForceRebuildTab
+        then
             ZugZug_UI_ForceRebuildTab("lfg")
+        elseif ZugZug_UI_UpdateTab then
+            ZugZug_UI_UpdateTab("lfg", "lfg_immediate")
         else
             ZugZug_UI_ShowTab("lfg")
         end

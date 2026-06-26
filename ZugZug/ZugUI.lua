@@ -38,6 +38,115 @@ local function ZugZug_UI_ClearPage(page)
     end
 end
 
+local function ZugZug_UI_ClearFrameContents(frame)
+    if not frame then return end
+
+    local regions = { frame:GetRegions() }
+    local i = 1
+    while regions[i] do
+        regions[i]:Hide()
+        regions[i]:SetParent(nil)
+        i = i + 1
+    end
+
+    local children = { frame:GetChildren() }
+    i = 1
+    while children[i] do
+        children[i]:Hide()
+        children[i]:SetParent(nil)
+        i = i + 1
+    end
+end
+
+local function ZugZug_UI_GetScrollValue(scrollFrame)
+    if scrollFrame and scrollFrame.GetVerticalScroll then
+        return scrollFrame:GetVerticalScroll() or 0
+    end
+
+    return 0
+end
+
+local function ZugZug_UI_GetScrollMax(scrollFrame, scrollChild)
+    local maxScroll = 0
+
+    if scrollFrame and scrollFrame.GetVerticalScrollRange then
+        maxScroll = scrollFrame:GetVerticalScrollRange() or 0
+    end
+
+    if scrollFrame and scrollChild and scrollFrame.GetHeight and scrollChild.GetHeight then
+        local frameHeight = scrollFrame:GetHeight() or 0
+        local childHeight = scrollChild:GetHeight() or 0
+        local calculated = childHeight - frameHeight
+
+        if calculated < 0 then calculated = 0 end
+        maxScroll = calculated
+    end
+
+    if maxScroll < 0 then maxScroll = 0 end
+    return maxScroll
+end
+
+local function ZugZug_UI_ClampScrollToValue(scrollFrame, scrollChild, scrollValue)
+    if not scrollFrame or not scrollFrame.SetVerticalScroll then return 0 end
+
+    local value = tonumber(scrollValue or 0) or 0
+    local maxScroll = ZugZug_UI_GetScrollMax(scrollFrame, scrollChild)
+
+    if value > maxScroll then value = maxScroll end
+    if value < 0 then value = 0 end
+
+    scrollFrame:SetVerticalScroll(value)
+    return value
+end
+
+local function ZugZug_UI_ClampScrollNextFrame(scrollFrame, scrollChild, scrollValue)
+    if not scrollFrame or not scrollFrame.SetVerticalScroll then return end
+
+    local frame = CreateFrame("Frame")
+    frame:SetScript("OnUpdate", function()
+        this:SetScript("OnUpdate", nil)
+        ZugZug_UI_ClampScrollToValue(scrollFrame, scrollChild, scrollValue)
+    end)
+end
+
+local function ZugZug_UI_SetScrollChildHeight(scrollFrame, scrollChild, height, scrollValue)
+    if not scrollChild then return end
+
+    if scrollValue == nil then
+        scrollValue = ZugZug_UI_GetScrollValue(scrollFrame)
+    end
+
+    scrollChild:SetHeight(height)
+    local clamped = ZugZug_UI_ClampScrollToValue(scrollFrame, scrollChild, scrollValue)
+    ZugZug_UI_ClampScrollNextFrame(scrollFrame, scrollChild, clamped)
+end
+
+local function ZugZug_UI_GetPoolFrame(parent, pool, index, createFunc)
+    if not pool or not index or not createFunc then return nil end
+
+    local frame = pool[index]
+    if not frame then
+        frame = createFunc(parent, index)
+        pool[index] = frame
+    end
+
+    if frame then
+        frame:Show()
+    end
+
+    return frame
+end
+
+local function ZugZug_UI_HidePoolFrom(pool, startIndex)
+    if not pool then return end
+
+    local i = startIndex or 1
+    while pool[i] do
+        pool[i]:Hide()
+        i = i + 1
+    end
+end
+
 local function ZugZug_UI_CreateText(parent, name, text, size)
     local fs = parent:CreateFontString(name, "OVERLAY", "GameFontNormal")
     fs:SetText(text or "")
@@ -304,7 +413,7 @@ local function ZugZug_UI_CreateTargetPicker(parent)
 
     scrollFrame:SetScript("OnMouseWheel", function()
         local current = this:GetVerticalScroll()
-        local maxScroll = this:GetVerticalScrollRange()
+        local maxScroll = ZugZug_UI_GetScrollMax(this, scrollChild)
 
         if not current then current = 0 end
         if not maxScroll then maxScroll = 0 end
@@ -1088,6 +1197,26 @@ function ZugZug_UI_Toggle()
     end
 end
 
+local function ZugZug_UI_GetArrayCount(rows)
+    if not rows then return 0 end
+
+    local count = 0
+    while rows[count + 1] do
+        count = count + 1
+    end
+
+    return count
+end
+
+local function ZugZug_UI_FormatChatMessage(row, color)
+    if not row then return nil end
+
+    local sender = row.sender or "?"
+    local msg = row.msg or ""
+    msg = string.gsub(msg, "|", "||")
+    return ZugZug_ClassColorize(sender) .. ": |" .. (color or "cff00ff00") .. msg .. "|r"
+end
+
 local function ZugZug_UI_AddChatMessages(chatFrame, rows, color)
     if not chatFrame then return end
 
@@ -1095,20 +1224,18 @@ local function ZugZug_UI_AddChatMessages(chatFrame, rows, color)
         color = "cff00ff00"
     end
 
-    if not rows or table.getn(rows) == 0 then
+    local count = ZugZug_UI_GetArrayCount(rows)
+
+    if count == 0 then
         chatFrame:AddMessage("|cff777777No messages yet.|r")
         return
     end
 
     local i = 1
-    while i <= table.getn(rows) do
-        local row = rows[i]
-
-        if row then
-            local sender = row.sender or "?"
-            local msg = row.msg or ""
-            msg = string.gsub(msg, "|", "||")
-            chatFrame:AddMessage(ZugZug_ClassColorize(sender) .. ": |" .. color .. msg .. "|r")
+    while i <= count do
+        local text = ZugZug_UI_FormatChatMessage(rows[i], color)
+        if text then
+            chatFrame:AddMessage(text)
         end
 
         i = i + 1
@@ -1119,12 +1246,97 @@ local function ZugZug_UI_AddChatMessages(chatFrame, rows, color)
     end
 end
 
+local function ZugZug_UI_GetChatRowSignature(row)
+    if not row then return "" end
+
+    return tostring(row.sender or "")
+        .. "\031" .. tostring(row.msg or "")
+        .. "\031" .. tostring(row.at or "")
+        .. "\031" .. tostring(row.source or "")
+end
+
+local function ZugZug_UI_IsChatAtBottom(chatFrame)
+    if not chatFrame then return true end
+
+    if chatFrame.GetCurrentScroll then
+        local current = chatFrame:GetCurrentScroll() or 0
+        if current > 0 then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function ZugZug_UI_UpdateChatMessagesIncremental(chatFrame, rows, color, emptyText)
+    if not chatFrame then return end
+    if not color then color = "cff00ff00" end
+    if not emptyText then emptyText = "|cff777777No messages yet.|r" end
+
+    local count = ZugZug_UI_GetArrayCount(rows)
+    local tailSignature = ""
+    if count > 0 then
+        tailSignature = ZugZug_UI_GetChatRowSignature(rows[count])
+    end
+
+    if count == 0 then
+        if chatFrame.zzRenderedRows ~= 0 or not chatFrame.zzEmptyShown then
+            if chatFrame.Clear then chatFrame:Clear() end
+            chatFrame:AddMessage(emptyText)
+            chatFrame.zzRenderedRows = 0
+            chatFrame.zzEmptyShown = true
+            chatFrame.zzChatColor = color
+            chatFrame.zzTailSignature = ""
+        end
+        return
+    end
+
+    local wasAtBottom = ZugZug_UI_IsChatAtBottom(chatFrame)
+    local rendered = chatFrame.zzRenderedRows or 0
+
+    if chatFrame.zzEmptyShown
+        or rendered > count
+        or chatFrame.zzChatColor ~= color
+        or (rendered == count and chatFrame.zzTailSignature and chatFrame.zzTailSignature ~= tailSignature)
+    then
+        if chatFrame.Clear then chatFrame:Clear() end
+        rendered = 0
+        chatFrame.zzEmptyShown = nil
+    end
+
+    local i = rendered + 1
+    while i <= count do
+        local text = ZugZug_UI_FormatChatMessage(rows[i], color)
+        if text then
+            chatFrame:AddMessage(text)
+        end
+        i = i + 1
+    end
+
+    chatFrame.zzRenderedRows = count
+    chatFrame.zzChatColor = color
+    chatFrame.zzTailSignature = tailSignature
+
+    if wasAtBottom and chatFrame.ScrollToBottom then
+        chatFrame:ScrollToBottom()
+    end
+end
+
 local function ZugZug_UI_SetChatMessages(chatFrame, rows, color)
     if not chatFrame then return end
     if chatFrame.Clear then
         chatFrame:Clear()
     end
     ZugZug_UI_AddChatMessages(chatFrame, rows, color)
+
+    local count = ZugZug_UI_GetArrayCount(rows)
+    chatFrame.zzRenderedRows = count
+    chatFrame.zzEmptyShown = count == 0
+    chatFrame.zzChatColor = color or "cff00ff00"
+    chatFrame.zzTailSignature = ""
+    if count > 0 then
+        chatFrame.zzTailSignature = ZugZug_UI_GetChatRowSignature(rows[count])
+    end
 end
 
 local function ZugZug_UI_CreateCapyChatPanel(parent, width, height)
@@ -1154,7 +1366,7 @@ local function ZugZug_UI_CreateCapyChatPanel(parent, width, height)
         end
     end)
 
-    ZugZug_UI_AddChatMessages(chatFrame, ZugZug.capyChatLog or {}, "cffd6e7ff")
+    ZugZug_UI_UpdateChatMessagesIncremental(chatFrame, ZugZug.capyChatLog or {}, "cffd6e7ff", "|cff777777No messages yet.|r")
 
     local inputFrame, input = ZugZug_UI_CreateCleanEditBox(panel, width - 78, 24, "")
     inputFrame:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 10, 10)
@@ -1369,7 +1581,7 @@ local function ZugZug_UI_CreateIdentityPanel(parent, width, height)
 
     scroll:SetScript("OnMouseWheel", function()
         local current = this:GetVerticalScroll()
-        local maxScroll = this:GetVerticalScrollRange()
+        local maxScroll = ZugZug_UI_GetScrollMax(this, scrollChild)
 
         if not current then current = 0 end
         if not maxScroll then maxScroll = 0 end
@@ -1642,7 +1854,7 @@ local function ZugZug_UI_UpdateDashboard(parent, reason)
     end
 
     if parent.refs.capyPanel and parent.refs.capyPanel.chatFrame then
-        ZugZug_UI_SetChatMessages(parent.refs.capyPanel.chatFrame, ZugZug.capyChatLog or {}, "cffd6e7ff")
+        ZugZug_UI_UpdateChatMessagesIncremental(parent.refs.capyPanel.chatFrame, ZugZug.capyChatLog or {}, "cffd6e7ff", "|cff777777No messages yet.|r")
     end
 
     if reason == "state" or reason == "identity" or reason == "motd" or reason == "guild_roster_motd" then
@@ -1755,6 +1967,336 @@ local function ZugZug_UI_UpdateDashboard(parent, reason)
     end
 end
 
+local function ZugZug_UI_GetLFGListings()
+    local rows = {}
+    local count = 0
+
+    for id, listing in pairs(ZugZug.LFG.listings) do
+        if listing then
+            count = count + 1
+            rows[count] = {
+                id = id,
+                listing = listing,
+            }
+        end
+    end
+
+    return rows, count
+end
+
+local function ZugZug_UI_CreateLFGCard(parent)
+    return ZugZug_UI_CreateCard(parent, 306, 132)
+end
+
+local function ZugZug_UI_RequestLFGListRender()
+    if ZugZug_UI_UpdateTab then
+        ZugZug_UI_UpdateTab("lfg", "lfg_state")
+    end
+end
+
+local function ZugZug_UI_RenderLFGCard(card, id, listing)
+    if not card or not id or not listing then return end
+
+    if not card.zzContent then
+        card.zzContent = CreateFrame("Frame", nil, card)
+        card.zzContent:SetAllPoints(card)
+    end
+
+    local shell = card
+    card = shell.zzContent
+    card:Show()
+    ZugZug_UI_ClearFrameContents(card)
+
+    local leader = listing.leader or ""
+    local leaderText = ZugZug_ClassColorize(leader)
+    local leaderRole = listing.leaderRole or "DPS"
+
+    if not ZugZug_LFG_IsValidRole(leaderRole) then
+        leaderRole = "DPS"
+    end
+
+    local roleCounts = { TANK = 0, HEALER = 0, DPS = 0 }
+    if ZugZug_LFG_CountRoles then
+        roleCounts = ZugZug_LFG_CountRoles(listing)
+    end
+
+    local titleText = "|cffffffff[" .. (listing.type or "Other") .. "]|r |cffffd100" .. (listing.target or "") .. "|r"
+
+    local rowTitle = ZugZug_UI_CreateText(card, nil, titleText, "normal")
+    rowTitle:SetPoint("TOPLEFT", card, "TOPLEFT", 10, -8)
+
+    local leaderIcon = ZugZug_UI_CreateZugIcon(card, 13)
+    leaderIcon:SetPoint("TOPLEFT", card, "TOPLEFT", 10, -30)
+
+    local rowLeader = ZugZug_UI_CreateText(card, nil, leaderText, "small")
+    rowLeader:SetPoint("LEFT", leaderIcon, "RIGHT", 4, 0)
+
+    local needTankIcon = ZugZug_UI_CreateRoleIcon(card, "TANK", 14)
+    needTankIcon:SetPoint("TOPLEFT", card, "TOPLEFT", 166, -30)
+
+    local needTankText = ZugZug_UI_CreateText(card, nil, tostring(roleCounts.TANK or 0) .. "/" .. tostring(listing.needTank or 0), "small")
+    needTankText:SetPoint("LEFT", needTankIcon, "RIGHT", 2, 0)
+
+    local needHealerIcon = ZugZug_UI_CreateRoleIcon(card, "HEALER", 14)
+    needHealerIcon:SetPoint("LEFT", needTankText, "RIGHT", 7, 0)
+
+    local needHealerText = ZugZug_UI_CreateText(card, nil, tostring(roleCounts.HEALER or 0) .. "/" .. tostring(listing.needHealer or 0), "small")
+    needHealerText:SetPoint("LEFT", needHealerIcon, "RIGHT", 2, 0)
+
+    local needDpsIcon = ZugZug_UI_CreateRoleIcon(card, "DPS", 14)
+    needDpsIcon:SetPoint("LEFT", needHealerText, "RIGHT", 7, 0)
+
+    local needDpsText = ZugZug_UI_CreateText(card, nil, tostring(roleCounts.DPS or 0) .. "/" .. tostring(listing.needDps or 0), "small")
+    needDpsText:SetPoint("LEFT", needDpsIcon, "RIGHT", 2, 0)
+
+    local playerName = UnitName("player")
+    local isLeader = false
+    local isMember = false
+
+    if leader == playerName then
+        isLeader = true
+    end
+
+    if ZugZug_LFG_IsListingMember and ZugZug_LFG_IsListingMember(listing, playerName) then
+        isMember = true
+    end
+
+    local isFull = false
+    if ZugZug_LFG_IsListingFull and ZugZug_LFG_IsListingFull(listing) then
+        isFull = true
+    end
+
+    local memberX = 10
+    local memberY = -54
+    local memberIndex = 1
+
+    while listing.members and memberIndex <= table.getn(listing.members) do
+        local member = listing.members[memberIndex]
+
+        if member and member.name then
+            local memberRole = member.role or "DPS"
+
+            if not ZugZug_LFG_IsValidRole(memberRole) then
+                memberRole = "DPS"
+            end
+
+            local roleButton = CreateFrame("Button", nil, card)
+            roleButton:SetWidth(13)
+            roleButton:SetHeight(13)
+            roleButton:SetPoint("TOPLEFT", card, "TOPLEFT", memberX, memberY)
+            roleButton.lfgId = id
+            roleButton.memberName = member.name
+            roleButton.memberRole = memberRole
+
+            local roleIcon = ZugZug_UI_CreateRoleIcon(roleButton, memberRole, 13)
+            roleIcon:SetAllPoints(roleButton)
+
+            if isLeader then
+                roleButton:SetScript("OnClick", function()
+                    ZugZug_LFG_CycleListingMemberRole(this.lfgId, this.memberName)
+                end)
+
+                roleButton:SetScript("OnEnter", function()
+                    GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+                    GameTooltip:SetText("Click to change role")
+                    GameTooltip:Show()
+                end)
+
+                roleButton:SetScript("OnLeave", function()
+                    GameTooltip:Hide()
+                end)
+            elseif member.name == playerName then
+                roleButton:SetScript("OnClick", function()
+                    local nextRole = ZugZug_LFG_GetNextRole(this.memberRole)
+                    ZugZug_LFG_RequestMyRoleChange(this.lfgId, nextRole)
+                end)
+
+                roleButton:SetScript("OnEnter", function()
+                    GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+                    GameTooltip:SetText("Click to change your role")
+                    GameTooltip:Show()
+                end)
+
+                roleButton:SetScript("OnLeave", function()
+                    GameTooltip:Hide()
+                end)
+            end
+
+            local memberName = ZugZug_ClassColorize(member.name)
+            local memberText = ZugZug_UI_CreateText(card, nil, memberName, "small")
+            memberText:SetPoint("LEFT", roleButton, "RIGHT", 3, 0)
+
+            memberX = memberX + 94
+
+            if memberX > 205 then
+                memberX = 10
+                memberY = memberY - 15
+            end
+        end
+
+        memberIndex = memberIndex + 1
+    end
+
+    if listing.note and listing.note ~= "" then
+        local note = ZugZug_UI_CreateText(card, nil, "|cff777777" .. listing.note .. "|r", "small")
+        note:SetPoint("TOPLEFT", card, "TOPLEFT", 10, -84)
+    end
+
+    if isLeader then
+        if ZugZug.UI.confirmCloseListingId == id then
+            local confirmButton = ZugZug_UI_CreateButton(card, nil, "Confirm", 66, 20)
+            confirmButton:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -64, 8)
+            confirmButton.lfgId = id
+            confirmButton:SetScript("OnClick", function()
+                ZugZug.UI.confirmCloseListingId = nil
+                ZugZug_LFG_CloseListing(this.lfgId)
+            end)
+
+            local cancelButton = ZugZug_UI_CreateButton(card, nil, "Cancel", 54, 20)
+            cancelButton:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -8, 8)
+            cancelButton:SetScript("OnClick", function()
+                ZugZug.UI.confirmCloseListingId = nil
+                ZugZug_UI_RequestLFGListRender()
+            end)
+        else
+            local closeButton = ZugZug_UI_CreateButton(card, nil, "Close", 54, 20)
+            closeButton:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -8, 8)
+            closeButton.lfgId = id
+            closeButton:SetScript("OnClick", function()
+                ZugZug.UI.confirmCloseListingId = this.lfgId
+                ZugZug_UI_RequestLFGListRender()
+            end)
+        end
+    elseif isMember then
+        -- Member cards have no extra action button.
+    else
+        local canJoinThis = true
+
+        if ZugZug_LFG_PlayerHasActiveListing and ZugZug_LFG_PlayerHasActiveListing() then
+            canJoinThis = false
+        end
+
+        if not canJoinThis then
+            local busyText = ZugZug_UI_CreateText(card, nil, "|cff777777Already in LFG|r", "small")
+            busyText:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -10, 11)
+        elseif isFull then
+            local fullText = ZugZug_UI_CreateText(card, nil, "|cff777777Full|r", "small")
+            fullText:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -10, 11)
+        elseif ZugZug.UI.selectedJoinListingId == id then
+            local roleText = ZugZug_UI_CreateText(card, nil, "Join as:", "small")
+            roleText:SetPoint("BOTTOMLEFT", card, "BOTTOMLEFT", 10, 11)
+
+            local last = roleText
+            local added = false
+
+            if not ZugZug_LFG_IsRoleFull or not ZugZug_LFG_IsRoleFull(listing, "TANK") then
+                local joinTank = ZugZug_UI_CreateRoleChoiceButton(card, "TANK", false, 50, 20)
+                joinTank:SetPoint("LEFT", last, "RIGHT", 6, 0)
+                joinTank.lfgId = id
+                joinTank:SetScript("OnClick", function()
+                    ZugZug_LFG_JoinListing(this.lfgId, "TANK")
+                end)
+                last = joinTank
+                added = true
+            end
+
+            if not ZugZug_LFG_IsRoleFull or not ZugZug_LFG_IsRoleFull(listing, "HEALER") then
+                local joinHealer = ZugZug_UI_CreateRoleChoiceButton(card, "HEALER", false, 50, 20)
+                joinHealer:SetPoint("LEFT", last, "RIGHT", 4, 0)
+                joinHealer.lfgId = id
+                joinHealer:SetScript("OnClick", function()
+                    ZugZug_LFG_JoinListing(this.lfgId, "HEALER")
+                end)
+                last = joinHealer
+                added = true
+            end
+
+            if not ZugZug_LFG_IsRoleFull or not ZugZug_LFG_IsRoleFull(listing, "DPS") then
+                local joinDps = ZugZug_UI_CreateRoleChoiceButton(card, "DPS", false, 50, 20)
+                joinDps:SetPoint("LEFT", last, "RIGHT", 4, 0)
+                joinDps.lfgId = id
+                joinDps:SetScript("OnClick", function()
+                    ZugZug_LFG_JoinListing(this.lfgId, "DPS")
+                end)
+                added = true
+            end
+
+            if not added then
+                roleText:SetText("|cff777777Full|r")
+            end
+        else
+            local joinButton = ZugZug_UI_CreateButton(card, nil, "Join", 54, 20)
+            joinButton:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -8, 8)
+            joinButton.lfgId = id
+            joinButton:SetScript("OnClick", function()
+                ZugZug.UI.selectedJoinListingId = this.lfgId
+                ZugZug_UI_RequestLFGListRender()
+            end)
+        end
+    end
+end
+
+local function ZugZug_UI_RenderLFGListings(parent)
+    if not parent or not parent.refs or not parent.refs.scrollChild then return end
+
+    local rows, count = ZugZug_UI_GetLFGListings()
+
+    if parent.refs.summary then
+        parent.refs.summary:SetText("|cff00ff00Active:|r " .. tostring(count))
+    end
+
+    local scrollChild = parent.refs.scrollChild
+    local scrollFrame = parent.refs.scrollFrame
+    local listHeight = parent.refs.lfgListHeight or 320
+    local cardWidth = 306
+    local cardHeight = 132
+    local rowsHigh = math.ceil(count / 2)
+
+    if rowsHigh < 1 then rowsHigh = 1 end
+
+    local childHeight = rowsHigh * (cardHeight + 10)
+    if childHeight < listHeight then
+        childHeight = listHeight
+    end
+
+    ZugZug_UI_SetScrollChildHeight(scrollFrame, scrollChild, childHeight)
+
+    parent.refs.lfgCards = parent.refs.lfgCards or {}
+
+    if count == 0 then
+        ZugZug_UI_HidePoolFrom(parent.refs.lfgCards, 1)
+
+        if not parent.refs.lfgEmpty then
+            parent.refs.lfgEmpty = ZugZug_UI_CreateText(scrollChild, nil, "|cffaaaaaaNo active guild LFG listings.|r", "normal")
+            parent.refs.lfgEmpty:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, 0)
+        end
+        parent.refs.lfgEmpty:Show()
+        return
+    end
+
+    if parent.refs.lfgEmpty then
+        parent.refs.lfgEmpty:Hide()
+    end
+
+    local index = 1
+    while index <= count do
+        local row = rows[index]
+        local col = math.mod(index - 1, 2)
+        local gridRow = math.floor((index - 1) / 2)
+        local card = ZugZug_UI_GetPoolFrame(scrollChild, parent.refs.lfgCards, index, ZugZug_UI_CreateLFGCard)
+
+        card:ClearAllPoints()
+        card:SetWidth(cardWidth)
+        card:SetHeight(cardHeight)
+        card:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", col * 316, -(gridRow * (cardHeight + 10)))
+        ZugZug_UI_RenderLFGCard(card, row.id, row.listing)
+
+        index = index + 1
+    end
+
+    ZugZug_UI_HidePoolFrom(parent.refs.lfgCards, count + 1)
+end
+
 local function ZugZug_UI_BuildLFG(parent)
     parent.refs = parent.refs or {}
 
@@ -1766,6 +2308,7 @@ local function ZugZug_UI_BuildLFG(parent)
     if ZugZug_LFG_CanCreateListing and not ZugZug_LFG_CanCreateListing() then
         canCreate = false
     end
+    parent.refs.canCreate = canCreate
 
     if not canCreate and ZugZug_LFG_IsCreateOpen and ZugZug_LFG_IsCreateOpen() then
         ZugZug_LFG_SetCreateOpen(false)
@@ -1800,13 +2343,17 @@ local function ZugZug_UI_BuildLFG(parent)
 
     local summary = ZugZug_UI_CreateText(parent, nil, "|cff00ff00Active:|r " .. count, "normal")
     summary:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, 0)
+    parent.refs.summary = summary
 
     local listTop = -34
     local listHeight = 320
+    parent.refs.createPanelShown = false
 
     if ZugZug_LFG_IsCreateOpen and ZugZug_LFG_IsCreateOpen() then
+        parent.refs.createPanelShown = true
         local panel = ZugZug_UI_CreateCard(parent, 634, 136)
         panel:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -30)
+        parent.refs.createPanel = panel
 
         local typeLabel = ZugZug_UI_CreateText(panel, nil, "Type", "small")
         typeLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -8)
@@ -1944,6 +2491,7 @@ local function ZugZug_UI_BuildLFG(parent)
     scrollFrame:SetHeight(listHeight)
     scrollFrame:EnableMouseWheel(true)
     parent.refs.scrollFrame = scrollFrame
+    parent.refs.lfgListHeight = listHeight
 
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
     scrollChild:SetWidth(634)
@@ -1956,8 +2504,8 @@ local function ZugZug_UI_BuildLFG(parent)
     if rows < 1 then rows = 1 end
 
     local childHeight = rows * (cardHeight + 10)
-    if childHeight < listHeight + 1 then
-        childHeight = listHeight + 1
+    if childHeight < listHeight then
+        childHeight = listHeight
     end
 
     scrollChild:SetHeight(childHeight)
@@ -1981,253 +2529,7 @@ local function ZugZug_UI_BuildLFG(parent)
         this:SetVerticalScroll(current)
     end)
 
-    if count == 0 then
-        local empty = ZugZug_UI_CreateText(scrollChild, nil, "|cffaaaaaaNo active guild LFG listings.|r", "normal")
-        empty:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, 0)
-        return
-    end
-
-    local index = 0
-
-    for id, listing in pairs(ZugZug.LFG.listings) do
-        if listing then
-            local col = math.mod(index, 2)
-            local row = math.floor(index / 2)
-
-            local card = ZugZug_UI_CreateCard(scrollChild, cardWidth, cardHeight)
-            card:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", col * 316, -(row * (cardHeight + 10)))
-
-            local leader = listing.leader or ""
-            local leaderText = ZugZug_ClassColorize(leader)
-            local leaderRole = listing.leaderRole or "DPS"
-
-            if not ZugZug_LFG_IsValidRole(leaderRole) then
-                leaderRole = "DPS"
-            end
-
-            local roleCounts = { TANK = 0, HEALER = 0, DPS = 0 }
-            if ZugZug_LFG_CountRoles then
-                roleCounts = ZugZug_LFG_CountRoles(listing)
-            end
-
-            local titleText = "|cffffffff[" .. (listing.type or "Other") .. "]|r |cffffd100" .. (listing.target or "") .. "|r"
-
-            local rowTitle = ZugZug_UI_CreateText(card, nil, titleText, "normal")
-            rowTitle:SetPoint("TOPLEFT", card, "TOPLEFT", 10, -8)
-
-            local leaderIcon = ZugZug_UI_CreateZugIcon(card, 13)
-            leaderIcon:SetPoint("TOPLEFT", card, "TOPLEFT", 10, -30)
-
-            local rowLeader = ZugZug_UI_CreateText(card, nil, leaderText, "small")
-            rowLeader:SetPoint("LEFT", leaderIcon, "RIGHT", 4, 0)
-
-            local needTankIcon = ZugZug_UI_CreateRoleIcon(card, "TANK", 14)
-            needTankIcon:SetPoint("TOPLEFT", card, "TOPLEFT", 166, -30)
-
-            local needTankText = ZugZug_UI_CreateText(card, nil, tostring(roleCounts.TANK or 0) .. "/" .. tostring(listing.needTank or 0), "small")
-            needTankText:SetPoint("LEFT", needTankIcon, "RIGHT", 2, 0)
-
-            local needHealerIcon = ZugZug_UI_CreateRoleIcon(card, "HEALER", 14)
-            needHealerIcon:SetPoint("LEFT", needTankText, "RIGHT", 7, 0)
-
-            local needHealerText = ZugZug_UI_CreateText(card, nil, tostring(roleCounts.HEALER or 0) .. "/" .. tostring(listing.needHealer or 0), "small")
-            needHealerText:SetPoint("LEFT", needHealerIcon, "RIGHT", 2, 0)
-
-            local needDpsIcon = ZugZug_UI_CreateRoleIcon(card, "DPS", 14)
-            needDpsIcon:SetPoint("LEFT", needHealerText, "RIGHT", 7, 0)
-
-            local needDpsText = ZugZug_UI_CreateText(card, nil, tostring(roleCounts.DPS or 0) .. "/" .. tostring(listing.needDps or 0), "small")
-            needDpsText:SetPoint("LEFT", needDpsIcon, "RIGHT", 2, 0)
-
-            local playerName = UnitName("player")
-            local isLeader = false
-            local isMember = false
-
-            if leader == playerName then
-                isLeader = true
-            end
-
-            if ZugZug_LFG_IsListingMember and ZugZug_LFG_IsListingMember(listing, playerName) then
-                isMember = true
-            end
-
-            local isFull = false
-            if ZugZug_LFG_IsListingFull and ZugZug_LFG_IsListingFull(listing) then
-                isFull = true
-            end
-
-            local memberX = 10
-            local memberY = -54
-            local memberIndex = 1
-
-            while listing.members and memberIndex <= table.getn(listing.members) do
-                local member = listing.members[memberIndex]
-
-                if member and member.name then
-                    local memberRole = member.role or "DPS"
-
-                    if not ZugZug_LFG_IsValidRole(memberRole) then
-                        memberRole = "DPS"
-                    end
-
-                    local roleButton = CreateFrame("Button", nil, card)
-                    roleButton:SetWidth(13)
-                    roleButton:SetHeight(13)
-                    roleButton:SetPoint("TOPLEFT", card, "TOPLEFT", memberX, memberY)
-                    roleButton.lfgId = id
-                    roleButton.memberName = member.name
-                    roleButton.memberRole = memberRole
-
-                    local roleIcon = ZugZug_UI_CreateRoleIcon(roleButton, memberRole, 13)
-                    roleIcon:SetAllPoints(roleButton)
-
-                    if isLeader then
-                        roleButton:SetScript("OnClick", function()
-                            ZugZug_LFG_CycleListingMemberRole(this.lfgId, this.memberName)
-                        end)
-
-                        roleButton:SetScript("OnEnter", function()
-                            GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-                            GameTooltip:SetText("Click to change role")
-                            GameTooltip:Show()
-                        end)
-
-                        roleButton:SetScript("OnLeave", function()
-                            GameTooltip:Hide()
-                        end)
-                    elseif member.name == playerName then
-                        roleButton:SetScript("OnClick", function()
-                            local nextRole = ZugZug_LFG_GetNextRole(this.memberRole)
-                            ZugZug_LFG_RequestMyRoleChange(this.lfgId, nextRole)
-                        end)
-
-                        roleButton:SetScript("OnEnter", function()
-                            GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-                            GameTooltip:SetText("Click to change your role")
-                            GameTooltip:Show()
-                        end)
-
-                        roleButton:SetScript("OnLeave", function()
-                            GameTooltip:Hide()
-                        end)
-                    end
-
-                    local memberName = ZugZug_ClassColorize(member.name)
-                    local memberText = ZugZug_UI_CreateText(card, nil, memberName, "small")
-                    memberText:SetPoint("LEFT", roleButton, "RIGHT", 3, 0)
-
-                    memberX = memberX + 94
-
-                    if memberX > 205 then
-                        memberX = 10
-                        memberY = memberY - 15
-                    end
-                end
-
-                memberIndex = memberIndex + 1
-            end
-
-            if listing.note and listing.note ~= "" then
-                local note = ZugZug_UI_CreateText(card, nil, "|cff777777" .. listing.note .. "|r", "small")
-                note:SetPoint("TOPLEFT", card, "TOPLEFT", 10, -84)
-            end
-
-            if isLeader then
-                if ZugZug.UI.confirmCloseListingId == id then
-                    local confirmButton = ZugZug_UI_CreateButton(card, nil, "Confirm", 66, 20)
-                    confirmButton:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -64, 8)
-                    confirmButton.lfgId = id
-                    confirmButton:SetScript("OnClick", function()
-                        ZugZug.UI.confirmCloseListingId = nil
-                        ZugZug_LFG_CloseListing(this.lfgId)
-                    end)
-
-                    local cancelButton = ZugZug_UI_CreateButton(card, nil, "Cancel", 54, 20)
-                    cancelButton:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -8, 8)
-                    cancelButton:SetScript("OnClick", function()
-                        ZugZug.UI.confirmCloseListingId = nil
-                        ZugZug_UI_ForceRebuildTab("lfg")
-                    end)
-                else
-                    local closeButton = ZugZug_UI_CreateButton(card, nil, "Close", 54, 20)
-                    closeButton:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -8, 8)
-                    closeButton.lfgId = id
-                    closeButton:SetScript("OnClick", function()
-                        ZugZug.UI.confirmCloseListingId = this.lfgId
-                        ZugZug_UI_ForceRebuildTab("lfg")
-                    end)
-                end
-            elseif isMember then
-                -- hmm
-            else
-                local canJoinThis = true
-
-                if ZugZug_LFG_PlayerHasActiveListing and ZugZug_LFG_PlayerHasActiveListing() then
-                    canJoinThis = false
-                end
-
-                if not canJoinThis then
-                    local busyText = ZugZug_UI_CreateText(card, nil, "|cff777777Already in LFG|r", "small")
-                    busyText:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -10, 11)
-                elseif isFull then
-                    local fullText = ZugZug_UI_CreateText(card, nil, "|cff777777Full|r", "small")
-                    fullText:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -10, 11)
-                elseif ZugZug.UI.selectedJoinListingId == id then
-                    local roleText = ZugZug_UI_CreateText(card, nil, "Join as:", "small")
-                    roleText:SetPoint("BOTTOMLEFT", card, "BOTTOMLEFT", 10, 11)
-
-                    local last = roleText
-                    local added = false
-
-                    if not ZugZug_LFG_IsRoleFull or not ZugZug_LFG_IsRoleFull(listing, "TANK") then
-                        local joinTank = ZugZug_UI_CreateRoleChoiceButton(card, "TANK", false, 50, 20)
-                        joinTank:SetPoint("LEFT", last, "RIGHT", 6, 0)
-                        joinTank.lfgId = id
-                        joinTank:SetScript("OnClick", function()
-                            ZugZug_LFG_JoinListing(this.lfgId, "TANK")
-                        end)
-                        last = joinTank
-                        added = true
-                    end
-
-                    if not ZugZug_LFG_IsRoleFull or not ZugZug_LFG_IsRoleFull(listing, "HEALER") then
-                        local joinHealer = ZugZug_UI_CreateRoleChoiceButton(card, "HEALER", false, 50, 20)
-                        joinHealer:SetPoint("LEFT", last, "RIGHT", 4, 0)
-                        joinHealer.lfgId = id
-                        joinHealer:SetScript("OnClick", function()
-                            ZugZug_LFG_JoinListing(this.lfgId, "HEALER")
-                        end)
-                        last = joinHealer
-                        added = true
-                    end
-
-                    if not ZugZug_LFG_IsRoleFull or not ZugZug_LFG_IsRoleFull(listing, "DPS") then
-                        local joinDps = ZugZug_UI_CreateRoleChoiceButton(card, "DPS", false, 50, 20)
-                        joinDps:SetPoint("LEFT", last, "RIGHT", 4, 0)
-                        joinDps.lfgId = id
-                        joinDps:SetScript("OnClick", function()
-                            ZugZug_LFG_JoinListing(this.lfgId, "DPS")
-                        end)
-                        added = true
-                    end
-
-                    if not added then
-                        roleText:SetText("|cff777777Full|r")
-                    end
-                else
-                    local joinButton = ZugZug_UI_CreateButton(card, nil, "Join", 54, 20)
-                    joinButton:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -8, 8)
-                    joinButton.lfgId = id
-                    joinButton:SetScript("OnClick", function()
-                        ZugZug.UI.selectedJoinListingId = this.lfgId
-                        ZugZug_UI_ForceRebuildTab("lfg")
-                    end)
-                end
-            end
-
-            index = index + 1
-        end
-    end
+    ZugZug_UI_RenderLFGListings(parent)
 end
 
 local function ZugZug_UI_GetAHTooltipLink(row)
@@ -2255,17 +2557,205 @@ local function ZugZug_UI_GetAHTooltipLink(row)
     return ""
 end
 
+local function ZugZug_UI_GetAuctionRows()
+    local rows = {}
+    local sourceRows = {}
+    if ZugZug_AH_GetSearchLog then
+        sourceRows = ZugZug_AH_GetSearchLog()
+    end
+
+    local onlyMine = false
+    if ZugZug_AH_GetOnlyMine then
+        onlyMine = ZugZug_AH_GetOnlyMine()
+    end
+
+    local player = UnitName("player") or ""
+    local visibleCount = 0
+    local i = 1
+    while sourceRows and i <= table.getn(sourceRows) do
+        local row = sourceRows[i]
+        if row then
+            local rowIsMine = false
+            if ZugZug_AH_IsRequesterMine then
+                rowIsMine = ZugZug_AH_IsRequesterMine(row.requester or "")
+            else
+                rowIsMine = string.lower(row.requester or "") == string.lower(player)
+            end
+
+            if not onlyMine or rowIsMine then
+                visibleCount = visibleCount + 1
+                rows[visibleCount] = row
+            end
+        end
+        i = i + 1
+    end
+
+    return rows, visibleCount
+end
+
+local function ZugZug_UI_CreateAuctionCard(parent)
+    local card = ZugZug_UI_CreateCard(parent, 307, 88)
+    card:EnableMouse(true)
+    return card
+end
+
+local function ZugZug_UI_RenderAuctionCard(card, row, clearSearchFocus)
+    if not card or not row then return end
+
+    if not card.zzContent then
+        card.zzContent = CreateFrame("Frame", nil, card)
+        card.zzContent:SetAllPoints(card)
+    end
+
+    local shell = card
+    shell:EnableMouse(true)
+    shell:SetScript("OnMouseDown", clearSearchFocus)
+
+    card = shell.zzContent
+    card:Show()
+    ZugZug_UI_ClearFrameContents(card)
+
+    local iconButton = CreateFrame("Button", nil, card)
+    iconButton:SetWidth(32)
+    iconButton:SetHeight(32)
+    iconButton:SetPoint("TOPLEFT", card, "TOPLEFT", 8, -8)
+    iconButton.itemLink = row.itemLink
+    iconButton.tooltipLink = ZugZug_UI_GetAHTooltipLink(row)
+    iconButton:SetScript("OnMouseDown", clearSearchFocus)
+
+    local icon = iconButton:CreateTexture(nil, "ARTWORK")
+    icon:SetAllPoints(iconButton)
+    local localIcon = ""
+    if ZugZug_AH_GetLocalIcon then
+        localIcon = ZugZug_AH_GetLocalIcon(row)
+    end
+    icon:SetTexture((localIcon and localIcon ~= "" and localIcon) or "Interface\\Icons\\INV_Misc_QuestionMark")
+
+    iconButton:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        if this.tooltipLink and this.tooltipLink ~= "" and GameTooltip.SetHyperlink then
+            GameTooltip:SetHyperlink(this.tooltipLink)
+        else
+            GameTooltip:SetText("Auction search")
+        end
+        GameTooltip:Show()
+    end)
+
+    iconButton:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+
+    local displayName = row.itemName
+    if not displayName or displayName == "" then
+        displayName = row.query or "Unknown item"
+    end
+
+    local countText = tostring(row.auctionCount or 0)
+    local nameText = "|cffffffff" .. displayName .. "|r"
+
+    local qtyText = ZugZug_UI_CreateText(card, nil, "|cffaaaaaaQty:|r |cffffffff" .. countText .. "|r", "small")
+    qtyText:SetPoint("TOPRIGHT", card, "TOPRIGHT", -10, -10)
+
+    local nameButton = CreateFrame("Button", nil, card)
+    nameButton:SetWidth(188)
+    nameButton:SetHeight(18)
+    nameButton:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -8)
+    nameButton.itemLink = row.itemLink
+    nameButton.tooltipLink = ZugZug_UI_GetAHTooltipLink(row)
+    nameButton.tooltipName = displayName
+    nameButton:SetScript("OnMouseDown", clearSearchFocus)
+
+    local nameFont = ZugZug_UI_CreateText(nameButton, nil, nameText, "normal")
+    nameFont:SetAllPoints(nameButton)
+
+    nameButton:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        if this.tooltipLink and this.tooltipLink ~= "" and GameTooltip.SetHyperlink then
+            GameTooltip:SetHyperlink(this.tooltipLink)
+        else
+            GameTooltip:SetText(this.tooltipName or "Auction search")
+        end
+        GameTooltip:Show()
+    end)
+
+    nameButton:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+
+    local minText = ZugZug_UI_CreateText(card, nil, "|cffaaaaaaMin Buyout:|r " .. ZugZug_AH_FormatCopper(row.minBuyout or 0), "small")
+    minText:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -28)
+
+    local avgText = ZugZug_UI_CreateText(card, nil, "|cffaaaaaaAvg Buyout:|r " .. ZugZug_AH_FormatCopper(row.avgBuyout or 0), "small")
+    avgText:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -44)
+
+    local meta = ZugZug_UI_CreateText(card, nil, "|cff777777" .. ZugZug_AH_TimeAgo(row.searchedAt) .. " by|r " .. ZugZug_ClassColorize(row.requester or "?"), "small")
+    meta:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -62)
+end
+
+local function ZugZug_UI_RenderAuctionResults(parent)
+    if not parent or not parent.refs or not parent.refs.scrollChild then return end
+
+    local rows, visibleCount = ZugZug_UI_GetAuctionRows()
+    local scrollChild = parent.refs.scrollChild
+    local scrollFrame = parent.refs.scrollFrame
+    local cardWidth = 307
+    local cardHeight = 88
+    local cardGap = 12
+    local rowHeight = 96
+    local gridRows = math.floor((visibleCount + 1) / 2)
+    local childHeight = gridRows * rowHeight
+    if childHeight < 240 then childHeight = 240 end
+
+    ZugZug_UI_SetScrollChildHeight(scrollFrame, scrollChild, childHeight)
+
+    parent.refs.auctionCards = parent.refs.auctionCards or {}
+
+    if visibleCount == 0 then
+        ZugZug_UI_HidePoolFrom(parent.refs.auctionCards, 1)
+
+        if not parent.refs.auctionEmpty then
+            parent.refs.auctionEmpty = ZugZug_UI_CreateText(scrollChild, nil, "|cff777777No AH searches yet.|r", "normal")
+            parent.refs.auctionEmpty:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, 0)
+        end
+        parent.refs.auctionEmpty:Show()
+        return
+    end
+
+    if parent.refs.auctionEmpty then
+        parent.refs.auctionEmpty:Hide()
+    end
+
+    local i = 1
+    while i <= visibleCount do
+        local row = rows[i]
+        local gridRow = math.floor((i - 1) / 2)
+        local col = (i - 1) - (gridRow * 2)
+        local x = col * (cardWidth + cardGap)
+        local y = 0 - (gridRow * rowHeight)
+
+        local card = ZugZug_UI_GetPoolFrame(scrollChild, parent.refs.auctionCards, i, ZugZug_UI_CreateAuctionCard)
+        card:ClearAllPoints()
+        card:SetWidth(cardWidth)
+        card:SetHeight(cardHeight)
+        card:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", x, y)
+        ZugZug_UI_RenderAuctionCard(card, row, parent.refs.clearSearchFocus)
+
+        i = i + 1
+    end
+
+    ZugZug_UI_HidePoolFrom(parent.refs.auctionCards, visibleCount + 1)
+end
+
 local function ZugZug_UI_BuildAuctionHouse(parent)
     parent.refs = parent.refs or {}
 
     local title = ZugZug_UI_CreateText(parent, nil, "Auction House Search", "large")
     title:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
 
-    --[[
-    local historyNote = ZugZug_UI_CreateText(parent, nil, "|cff777777Visit |r|cffffffffWoWAuctions.net|r|cff777777 for historical data|r", "small")
-    historyNote:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, -3)
-    --]]
-
+    
+    local wowAuctionsAd = ZugZug_UI_CreateText(parent, nil, "|cff777777Powered by |r|cffffffffWoWAuctions.net|r|cff777777 just for Zug Zug|r", "small")
+    wowAuctionsAd:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, -3)
+    
     local inputFrame, searchEdit = ZugZug_UI_CreateCleanEditBox(parent, 438, 24, "")
     inputFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -34)
     searchEdit:SetMaxLetters(80)
@@ -2279,6 +2769,7 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
             searchEdit:ClearFocus()
         end
     end
+    parent.refs.clearSearchFocus = clearSearchFocus
 
     parent:EnableMouse(true)
     parent:SetScript("OnMouseDown", clearSearchFocus)
@@ -2312,7 +2803,7 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
         if ZugZug_AH_ClearResults then
             ZugZug_AH_ClearResults()
         end
-        ZugZug_UI_ShowTab("auction")
+        ZugZug_UI_RenderAuctionResults(parent)
     end)
 
     local function doSearch()
@@ -2340,6 +2831,7 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
     onlyMineCheck:SetHeight(22)
     onlyMineCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -66)
     onlyMineCheck:SetScript("OnMouseDown", clearSearchFocus)
+    parent.refs.onlyMineCheck = onlyMineCheck
 
     if onlyMine then
         onlyMineCheck:SetChecked(1)
@@ -2352,7 +2844,7 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
             ZugZug_AH_SetOnlyMine(this:GetChecked())
         end
 
-        ZugZug_UI_ShowTab("auction")
+        ZugZug_UI_RenderAuctionResults(parent)
     end)
 
     local onlyMineText = ZugZug_UI_CreateText(parent, nil, "Only show my Searches", "small")
@@ -2395,140 +2887,7 @@ local function ZugZug_UI_BuildAuctionHouse(parent)
         this:SetVerticalScroll(current)
     end)
 
-    local rows = {}
-    local sourceRows = {}
-    if ZugZug_AH_GetSearchLog then
-        sourceRows = ZugZug_AH_GetSearchLog()
-    end
-
-    local player = UnitName("player") or ""
-    local visibleCount = 0
-    local i = 1
-    while sourceRows and i <= table.getn(sourceRows) do
-        local row = sourceRows[i]
-        if row then
-            local rowIsMine = false
-            if ZugZug_AH_IsRequesterMine then
-                rowIsMine = ZugZug_AH_IsRequesterMine(row.requester or "")
-            else
-                rowIsMine = string.lower(row.requester or "") == string.lower(player)
-            end
-
-            if not onlyMine or rowIsMine then
-                visibleCount = visibleCount + 1
-                rows[visibleCount] = row
-            end
-        end
-        i = i + 1
-    end
-
-    local cardWidth = 307
-    local cardHeight = 88
-    local cardGap = 12
-    local rowHeight = 96
-    local gridRows = math.floor((visibleCount + 1) / 2)
-    local childHeight = gridRows * rowHeight
-    if childHeight < 241 then childHeight = 241 end
-    scrollChild:SetHeight(childHeight)
-
-    if visibleCount == 0 then
-        local empty = ZugZug_UI_CreateText(scrollChild, nil, "|cff777777No AH searches yet.|r", "normal")
-        empty:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, 0)
-        return
-    end
-
-    local y = 0
-    i = 1
-    while i <= visibleCount do
-        local row = rows[i]
-        local gridRow = math.floor((i - 1) / 2)
-        local col = (i - 1) - (gridRow * 2)
-        local x = col * (cardWidth + cardGap)
-        y = 0 - (gridRow * rowHeight)
-
-        local card = ZugZug_UI_CreateCard(scrollChild, cardWidth, cardHeight)
-        card:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", x, y)
-        card:EnableMouse(true)
-        card:SetScript("OnMouseDown", clearSearchFocus)
-
-        local iconButton = CreateFrame("Button", nil, card)
-        iconButton:SetWidth(32)
-        iconButton:SetHeight(32)
-        iconButton:SetPoint("TOPLEFT", card, "TOPLEFT", 8, -8)
-        iconButton.itemLink = row.itemLink
-        iconButton.tooltipLink = ZugZug_UI_GetAHTooltipLink(row)
-        iconButton:SetScript("OnMouseDown", clearSearchFocus)
-
-        local icon = iconButton:CreateTexture(nil, "ARTWORK")
-        icon:SetAllPoints(iconButton)
-        local localIcon = ""
-        if ZugZug_AH_GetLocalIcon then
-            localIcon = ZugZug_AH_GetLocalIcon(row)
-        end
-        icon:SetTexture((localIcon and localIcon ~= "" and localIcon) or "Interface\\Icons\\INV_Misc_QuestionMark")
-
-        iconButton:SetScript("OnEnter", function()
-            GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-            if this.tooltipLink and this.tooltipLink ~= "" and GameTooltip.SetHyperlink then
-                GameTooltip:SetHyperlink(this.tooltipLink)
-            else
-                GameTooltip:SetText("Auction search")
-            end
-            GameTooltip:Show()
-        end)
-
-        iconButton:SetScript("OnLeave", function()
-            GameTooltip:Hide()
-        end)
-
-        local displayName = row.itemName
-        if not displayName or displayName == "" then
-            displayName = row.query or "Unknown item"
-        end
-
-        local countText = tostring(row.auctionCount or 0)
-        local nameText = "|cffffffff" .. displayName .. "|r"
-
-        local qtyText = ZugZug_UI_CreateText(card, nil, "|cffaaaaaaQty:|r |cffffffff" .. countText .. "|r", "small")
-        qtyText:SetPoint("TOPRIGHT", card, "TOPRIGHT", -10, -10)
-
-        local nameButton = CreateFrame("Button", nil, card)
-        nameButton:SetWidth(188)
-        nameButton:SetHeight(18)
-        nameButton:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -8)
-        nameButton.itemLink = row.itemLink
-        nameButton.tooltipLink = ZugZug_UI_GetAHTooltipLink(row)
-        nameButton.tooltipName = displayName
-        nameButton:SetScript("OnMouseDown", clearSearchFocus)
-
-        local nameFont = ZugZug_UI_CreateText(nameButton, nil, nameText, "normal")
-        nameFont:SetAllPoints(nameButton)
-
-        nameButton:SetScript("OnEnter", function()
-            GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-            if this.tooltipLink and this.tooltipLink ~= "" and GameTooltip.SetHyperlink then
-                GameTooltip:SetHyperlink(this.tooltipLink)
-            else
-                GameTooltip:SetText(this.tooltipName or "Auction search")
-            end
-            GameTooltip:Show()
-        end)
-
-        nameButton:SetScript("OnLeave", function()
-            GameTooltip:Hide()
-        end)
-
-        local minText = ZugZug_UI_CreateText(card, nil, "|cffaaaaaaMin Buyout:|r " .. ZugZug_AH_FormatCopper(row.minBuyout or 0), "small")
-        minText:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -28)
-
-        local avgText = ZugZug_UI_CreateText(card, nil, "|cffaaaaaaAvg Buyout:|r " .. ZugZug_AH_FormatCopper(row.avgBuyout or 0), "small")
-        avgText:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -44)
-
-        local meta = ZugZug_UI_CreateText(card, nil, "|cff777777" .. ZugZug_AH_TimeAgo(row.searchedAt) .. " by|r " .. ZugZug_ClassColorize(row.requester or "?"), "small")
-        meta:SetPoint("TOPLEFT", card, "TOPLEFT", 48, -62)
-
-        i = i + 1
-    end
+    ZugZug_UI_RenderAuctionResults(parent)
 end
 
 local function ZugZug_UI_GetLevelDifficultyColor(level)
@@ -2587,6 +2946,220 @@ local function ZugZug_UI_IsMemberWithinPlayerLevel(member)
     end
 
     return memberLevel >= minLevel and memberLevel <= maxLevel
+end
+
+local function ZugZug_UI_GetRosterData()
+    local playerZone = ""
+    if GetRealZoneText then
+        playerZone = GetRealZoneText() or ""
+    elseif GetZoneText then
+        playerZone = GetZoneText() or ""
+    end
+
+    local totalOnline = 0
+    if ZugZug_GetOnlineMemberCount then
+        totalOnline = ZugZug_GetOnlineMemberCount()
+    end
+
+    local sameZoneOnly = ZugZug_IsRosterSameZoneOnly()
+    local withinLevelOnly = false
+    if ZugZug_IsRosterWithinMyLevelOnly then
+        withinLevelOnly = ZugZug_IsRosterWithinMyLevelOnly()
+    end
+
+    local playerName = UnitName("player")
+    local nearbyCount = 0
+    local rows = {}
+    local visibleCount = 0
+
+    local i = 1
+    while ZugZug.onlineMembers and i <= table.getn(ZugZug.onlineMembers) do
+        local member = ZugZug.onlineMembers[i]
+
+        if member and member.name then
+            if member.zone == playerZone and member.name ~= playerName then
+                nearbyCount = nearbyCount + 1
+            end
+
+            local showMember = true
+
+            if sameZoneOnly and member.zone ~= playerZone then
+                showMember = false
+            end
+
+            if withinLevelOnly and not ZugZug_UI_IsMemberWithinPlayerLevel(member) then
+                showMember = false
+            end
+
+            if showMember then
+                visibleCount = visibleCount + 1
+                rows[visibleCount] = member
+            end
+        end
+
+        i = i + 1
+    end
+
+    return rows, visibleCount, totalOnline, nearbyCount, sameZoneOnly, withinLevelOnly, playerZone
+end
+
+local function ZugZug_UI_CreateRosterRow(parent)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetWidth(634)
+    row:SetHeight(18)
+
+    row.levelFont = ZugZug_UI_CreateText(row, nil, "", "normal")
+    row.levelFont:SetWidth(34)
+    row.levelFont:SetJustifyH("RIGHT")
+    row.levelFont:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+
+    row.nameFont = ZugZug_UI_CreateText(row, nil, "", "normal")
+    row.nameFont:SetPoint("TOPLEFT", row, "TOPLEFT", 52, 0)
+
+    row.zoneFont = ZugZug_UI_CreateText(row, nil, "", "normal")
+    row.zoneFont:SetWidth(220)
+    row.zoneFont:SetJustifyH("RIGHT")
+    row.zoneFont:SetPoint("TOPRIGHT", row, "TOPRIGHT", -4, 0)
+
+    row.zoneButton = CreateFrame("Button", nil, row)
+    row.zoneButton:SetWidth(220)
+    row.zoneButton:SetHeight(18)
+    row.zoneButton:SetPoint("TOPRIGHT", row, "TOPRIGHT", -4, 1)
+    row.zoneButton:SetScript("OnClick", function()
+        if ZugZug_ShowGuildLocation then
+            ZugZug_ShowGuildLocation(this.memberName)
+        end
+    end)
+    row.zoneButton:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+        GameTooltip:SetText("View on Map")
+        GameTooltip:Show()
+    end)
+    row.zoneButton:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    row.zoneButton:Hide()
+
+    return row
+end
+
+local function ZugZug_UI_RenderRoster(parent)
+    if not parent or not parent.refs then return end
+
+    local rows, visibleCount, totalOnline, nearbyCount, sameZoneOnly, withinLevelOnly, playerZone = ZugZug_UI_GetRosterData()
+
+    if parent.refs.summary then
+        parent.refs.summary:SetText("|cff00ff00Online:|r " .. totalOnline .. " |cffaaaaaa(" .. nearbyCount .. " nearby)|r")
+    end
+
+    if parent.refs.levelCheck then
+        if withinLevelOnly then parent.refs.levelCheck:SetChecked(1) else parent.refs.levelCheck:SetChecked(nil) end
+    end
+
+    if parent.refs.zoneCheck then
+        if sameZoneOnly then parent.refs.zoneCheck:SetChecked(1) else parent.refs.zoneCheck:SetChecked(nil) end
+    end
+
+    local scrollChild = parent.refs.scrollChild
+    local scrollFrame = parent.refs.scrollFrame
+    if not scrollChild then return end
+
+    local rowHeight = 18
+    local visibleHeight = 290
+    local totalRows = visibleCount
+
+    if totalRows < 1 then
+        totalRows = 1
+    end
+
+    local childHeight = totalRows * rowHeight
+    if childHeight < visibleHeight then
+        childHeight = visibleHeight
+    end
+
+    ZugZug_UI_SetScrollChildHeight(scrollFrame, scrollChild, childHeight, parent.refs.rosterResetScroll and 0 or nil)
+    parent.refs.rosterResetScroll = nil
+
+    parent.refs.rosterRows = parent.refs.rosterRows or {}
+
+    if visibleCount == 0 then
+        ZugZug_UI_HidePoolFrom(parent.refs.rosterRows, 1)
+
+        local emptyText = "|cffaaaaaaNo online members cached yet.|r"
+        if sameZoneOnly and withinLevelOnly then
+            emptyText = "|cffaaaaaaNo online guildies found matching your filters.|r"
+        elseif sameZoneOnly then
+            emptyText = "|cffaaaaaaNo online guildies found in your current zone.|r"
+        elseif withinLevelOnly then
+            emptyText = "|cffaaaaaaNo online guildies found within your level range.|r"
+        end
+
+        if not parent.refs.rosterEmpty then
+            parent.refs.rosterEmpty = ZugZug_UI_CreateText(scrollChild, nil, "", "normal")
+            parent.refs.rosterEmpty:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, 0)
+        end
+        parent.refs.rosterEmpty:SetText(emptyText)
+        parent.refs.rosterEmpty:Show()
+        return
+    end
+
+    if parent.refs.rosterEmpty then
+        parent.refs.rosterEmpty:Hide()
+    end
+
+    local i = 1
+    while i <= visibleCount do
+        local member = rows[i]
+        local row = ZugZug_UI_GetPoolFrame(scrollChild, parent.refs.rosterRows, i, ZugZug_UI_CreateRosterRow)
+        local y = -((i - 1) * rowHeight)
+
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, y)
+
+        local level = member.level or ""
+        local coloredName = ZugZug_ClassColorize(member.name)
+        local version = ZugZug_GetAddonVersionForMember(member.name)
+        local nameText = coloredName
+
+        if member.rankIndex == 0 then
+            nameText = nameText .. " |cffffd100(GM)|r"
+        elseif member.rankIndex and member.rankIndex <= 2 then
+            nameText = nameText .. " |cff00ffff(Officer)|r"
+        elseif member.isFriend or (ZugZug_IsFriend and ZugZug_IsFriend(member.name)) then
+            nameText = nameText .. " |cff00ff00(Friend)|r"
+        end
+
+        if version then
+            nameText = nameText .. " |cff777777v" .. version .. "|r"
+        end
+
+        local zone = member.zone or ""
+        local zoneColor = "|cffffffff"
+        if zone ~= "" and zone == playerZone then
+            zoneColor = "|cff00ff00"
+        end
+
+        local hasLocation = false
+        if ZugZug_FindGuildLocation and ZugZug_FindGuildLocation(member.name) then
+            hasLocation = true
+        end
+
+        local levelColor = ZugZug_UI_GetLevelDifficultyColor(level)
+        row.levelFont:SetText("|c" .. levelColor .. tostring(level or "") .. "|r")
+        row.nameFont:SetText(nameText)
+        row.zoneFont:SetText(zoneColor .. zone .. "|r")
+
+        row.zoneButton.memberName = member.name
+        if hasLocation then
+            row.zoneButton:Show()
+        else
+            row.zoneButton:Hide()
+        end
+
+        i = i + 1
+    end
+
+    ZugZug_UI_HidePoolFrom(parent.refs.rosterRows, visibleCount + 1)
 end
 
 local function ZugZug_UI_BuildGuild(parent)
@@ -2654,6 +3227,7 @@ local function ZugZug_UI_BuildGuild(parent)
     levelCheck:SetWidth(20)
     levelCheck:SetHeight(20)
     levelCheck:SetPoint("TOPLEFT", parent, "TOPLEFT", -4, -20)
+    parent.refs.levelCheck = levelCheck
 
     if withinLevelOnly then
         levelCheck:SetChecked(1)
@@ -2668,7 +3242,8 @@ local function ZugZug_UI_BuildGuild(parent)
             ZugZug_SetRosterWithinMyLevelOnly(false)
         end
 
-        ZugZug_UI_ShowTab("guild")
+        parent.refs.rosterResetScroll = true
+        ZugZug_UI_RenderRoster(parent)
     end)
 
     local levelCheckText = ZugZug_UI_CreateText(parent, nil, "Show within my level", "small")
@@ -2678,6 +3253,7 @@ local function ZugZug_UI_BuildGuild(parent)
     zoneCheck:SetWidth(20)
     zoneCheck:SetHeight(20)
     zoneCheck:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -126, -20)
+    parent.refs.zoneCheck = zoneCheck
 
     if sameZoneOnly then
         zoneCheck:SetChecked(1)
@@ -2692,7 +3268,8 @@ local function ZugZug_UI_BuildGuild(parent)
             ZugZug_SetRosterSameZoneOnly(false)
         end
 
-        ZugZug_UI_ShowTab("guild")
+        parent.refs.rosterResetScroll = true
+        ZugZug_UI_RenderRoster(parent)
     end)
 
     local zoneCheckText = ZugZug_UI_CreateText(parent, nil, "Only Show Nearby", "small")
@@ -2732,8 +3309,8 @@ local function ZugZug_UI_BuildGuild(parent)
     end
 
     local childHeight = totalRows * rowHeight
-    if childHeight < visibleHeight + 1 then
-        childHeight = visibleHeight + 1
+    if childHeight < visibleHeight then
+        childHeight = visibleHeight
     end
 
     scrollChild:SetHeight(childHeight)
@@ -2754,113 +3331,10 @@ local function ZugZug_UI_BuildGuild(parent)
             if current > maxScroll then current = maxScroll end
         end
 
-        this:SetVerticalScroll(current)
+        ZugZug_UI_ClampScrollToValue(this, scrollChild, current)
     end)
 
-    if visibleCount == 0 then
-        local emptyText = "|cffaaaaaaNo online members cached yet.|r"
-        if sameZoneOnly and withinLevelOnly then
-            emptyText = "|cffaaaaaaNo online guildies found matching your filters.|r"
-        elseif sameZoneOnly then
-            emptyText = "|cffaaaaaaNo online guildies found in your current zone.|r"
-        elseif withinLevelOnly then
-            emptyText = "|cffaaaaaaNo online guildies found within your level range.|r"
-        end
-
-        local empty = ZugZug_UI_CreateText(scrollChild, nil, emptyText, "normal")
-        empty:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, 0)
-        return
-    end
-
-    local y = 0
-    i = 1
-
-    while ZugZug.onlineMembers and i <= table.getn(ZugZug.onlineMembers) do
-        local member = ZugZug.onlineMembers[i]
-
-        if member and member.name then
-            local showMember = true
-
-            if sameZoneOnly and member.zone ~= playerZone then
-                showMember = false
-            end
-
-            if withinLevelOnly and not ZugZug_UI_IsMemberWithinPlayerLevel(member) then
-                showMember = false
-            end
-
-            if showMember then
-                local level = member.level or ""
-                local coloredName = ZugZug_ClassColorize(member.name)
-                local version = ZugZug_GetAddonVersionForMember(member.name)
-
-                local nameText = coloredName
-
-                if member.rankIndex == 0 then
-                    nameText = nameText .. " |cffffd100(GM)|r"
-                elseif member.rankIndex and member.rankIndex <= 2 then
-                    nameText = nameText .. " |cff00ffff(Officer)|r"
-                elseif member.isFriend or (ZugZug_IsFriend and ZugZug_IsFriend(member.name)) then
-                    nameText = nameText .. " |cff00ff00(Friend)|r"
-                end
-
-                if version then
-                    nameText = nameText .. " |cff777777v" .. version .. "|r"
-                end
-
-                local zone = member.zone or ""
-
-                local zoneColor = "|cffffffff"
-                if zone ~= "" and zone == playerZone then
-                    zoneColor = "|cff00ff00"
-                end
-
-                local nameFont = ZugZug_UI_CreateText(scrollChild, nil, nameText, "normal")
-                nameFont:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 52, y)
-
-                local hasLocation = false
-                if ZugZug_FindGuildLocation and ZugZug_FindGuildLocation(member.name) then
-                    hasLocation = true
-                end
-
-                local zoneFont = ZugZug_UI_CreateText(scrollChild, nil, zoneColor .. zone .. "|r", "normal")
-                zoneFont:SetWidth(220)
-                zoneFont:SetJustifyH("RIGHT")
-                zoneFont:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", -4, y)
-
-                if hasLocation then
-                    local zoneButton = CreateFrame("Button", nil, scrollChild)
-                    zoneButton:SetWidth(220)
-                    zoneButton:SetHeight(rowHeight)
-                    zoneButton:SetPoint("TOPRIGHT", scrollChild, "TOPRIGHT", -4, y + 1)
-                    zoneButton.memberName = member.name
-                    zoneButton:SetScript("OnClick", function()
-                        if ZugZug_ShowGuildLocation then
-                            ZugZug_ShowGuildLocation(this.memberName)
-                        end
-                    end)
-                    zoneButton:SetScript("OnEnter", function()
-                        GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-                        GameTooltip:SetText("View on Map")
-                        GameTooltip:Show()
-                    end)
-                    zoneButton:SetScript("OnLeave", function()
-                        GameTooltip:Hide()
-                    end)
-                end
-
-                local levelColor = ZugZug_UI_GetLevelDifficultyColor(level)
-                local levelFont = ZugZug_UI_CreateText(scrollChild, nil, "|c" .. levelColor .. tostring(level or "") .. "|r", "normal")
-                levelFont:SetWidth(34)
-                levelFont:SetJustifyH("RIGHT")
-                levelFont:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, y)
-
-                y = y - rowHeight
-            end
-        end
-
-        i = i + 1
-    end
+    ZugZug_UI_RenderRoster(parent)
 end
 
 local function ZugZug_UI_BuildSettings(parent)
@@ -3083,6 +3557,8 @@ local function ZugZug_UI_BuildSettings(parent)
 end
 
 local function ZugZug_UI_BuildOfficer(parent)
+    parent.refs = parent.refs or {}
+
     local title = ZugZug_UI_CreateText(parent, nil, "Officer Panel", "large")
     title:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
 
@@ -3125,34 +3601,9 @@ local function ZugZug_UI_BuildOfficer(parent)
             this:ScrollDown()
         end
     end)
+    parent.refs.officerChatFrame = chatFrame
 
-    local chatCount = 0
-    if ZugZug.officerChatLog then
-        chatCount = table.getn(ZugZug.officerChatLog)
-    end
-
-    if chatCount == 0 then
-        chatFrame:AddMessage("|cff777777No officer chat captured yet.|r")
-    else
-        local i = 1
-
-        while ZugZug.officerChatLog and i <= table.getn(ZugZug.officerChatLog) do
-            local row = ZugZug.officerChatLog[i]
-
-            if row then
-                local sender = row.sender or "?"
-                local msg = row.msg or ""
-
-                chatFrame:AddMessage(ZugZug_ClassColorize(sender) .. ": |cff69ccf0" .. msg .. "|r")
-            end
-
-            i = i + 1
-        end
-
-        if chatFrame.ScrollToBottom then
-            chatFrame:ScrollToBottom()
-        end
-    end
+    ZugZug_UI_UpdateChatMessagesIncremental(chatFrame, ZugZug.officerChatLog or {}, "cff69ccf0", "|cff777777No officer chat captured yet.|r")
 
     -- Right Panel
     local banTitle = ZugZug_UI_CreateText(right, nil, "|cffff5555Bans|r", "normal")
@@ -3307,17 +3758,12 @@ end
 local function ZugZug_UI_SetScrollClamped(scrollFrame, scrollValue)
     if not scrollFrame or not scrollFrame.SetVerticalScroll then return end
 
-    local value = tonumber(scrollValue or 0) or 0
-    local maxScroll = 0
-
-    if scrollFrame.GetVerticalScrollRange then
-        maxScroll = scrollFrame:GetVerticalScrollRange() or 0
+    local scrollChild = nil
+    if scrollFrame.GetScrollChild then
+        scrollChild = scrollFrame:GetScrollChild()
     end
 
-    if value > maxScroll then value = maxScroll end
-    if value < 0 then value = 0 end
-
-    scrollFrame:SetVerticalScroll(value)
+    ZugZug_UI_ClampScrollToValue(scrollFrame, scrollChild, scrollValue)
 end
 
 local function ZugZug_UI_RestoreScrollNextFrame(scrollFrame, scrollValue)
@@ -3346,61 +3792,33 @@ local function ZugZug_UI_RebuildTabPreservingScroll(key, page)
 end
 
 local function ZugZug_UI_UpdateGuild(parent, reason)
-    ZugZug_UI_RebuildTabPreservingScroll("guild", parent)
+    ZugZug_UI_RenderRoster(parent)
 end
 
 local function ZugZug_UI_UpdateLFG(parent, reason)
-    ZugZug_UI_RebuildTabPreservingScroll("lfg", parent)
+    ZugZug_UI_RenderLFGListings(parent)
 end
 
 local function ZugZug_UI_UpdateAuction(parent, reason)
-    local text = ""
-    local itemLink = nil
-    local itemId = nil
-    local hadFocus = false
-    local scrollValue = 0
+    if not parent or not parent.refs then return end
 
-    if parent and parent.refs then
-        local edit = parent.refs.searchEdit
-        if edit then
-            text = edit:GetText() or ""
-            itemLink = edit.ahItemLink
-            itemId = edit.ahItemId
-            if edit.HasFocus and edit:HasFocus() then
-                hadFocus = true
-            end
-        end
-
-        if parent.refs.scrollFrame and parent.refs.scrollFrame.GetVerticalScroll then
-            scrollValue = parent.refs.scrollFrame:GetVerticalScroll() or 0
+    if parent.refs.onlyMineCheck and ZugZug_AH_GetOnlyMine then
+        if ZugZug_AH_GetOnlyMine() then
+            parent.refs.onlyMineCheck:SetChecked(1)
+        else
+            parent.refs.onlyMineCheck:SetChecked(nil)
         end
     end
 
-    ZugZug_UI_ShowTab("auction", true)
-
-    local nextPage = ZugZug.UI and ZugZug.UI.pages and ZugZug.UI.pages.auction
-    if nextPage and nextPage.refs then
-        local edit = nextPage.refs.searchEdit
-        if edit then
-            edit.ahSettingText = true
-            edit:SetText(text or "")
-            edit.ahSettingText = nil
-            edit.ahItemLink = itemLink
-            edit.ahItemId = itemId
-            if hadFocus then
-                edit:SetFocus()
-            end
-        end
-
-        local scrollFrame = nextPage.refs.scrollFrame
-        if scrollFrame then
-            ZugZug_UI_SetScrollClamped(scrollFrame, scrollValue)
-            ZugZug_UI_RestoreScrollNextFrame(scrollFrame, scrollValue)
-        end
-    end
+    ZugZug_UI_RenderAuctionResults(parent)
 end
 
 local function ZugZug_UI_UpdateOfficer(parent, reason)
+    if parent and parent.refs and parent.refs.officerChatFrame and reason == "officer_chat" then
+        ZugZug_UI_UpdateChatMessagesIncremental(parent.refs.officerChatFrame, ZugZug.officerChatLog or {}, "cff69ccf0", "|cff777777No officer chat captured yet.|r")
+        return
+    end
+
     ZugZug_UI_RebuildTabPreservingScroll("officer", parent)
 end
 
