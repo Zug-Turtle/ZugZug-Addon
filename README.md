@@ -41,6 +41,16 @@ It is useful for quickly seeing who is around, where guildies are, and who might
 
 ![Roster](.github/assets/roster.png)
 
+## WoWAuctions Search
+
+Thanks to Dogacans for the custom [WoWAuctions](https://wowauctions.net) integration for our guild <3 
+
+The addon will store your searched items and update the prices anytime anyone searches the item.
+
+Items you have stored will show prices on item tooltips as well. You can choose to store other guildies' searches, or just your own.
+
+![WoWAuctions](.github/assets/auction.png)
+
 ## Verified Characters
 
 If you verify through Discord, the Zug Zug addon can show your linked characters on the dashboard.
